@@ -6,3 +6,21 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# TODO: Replace the * by the latest version numbers.
+# bevy = "0.13.2"
+bevy = { version = "0.13.2", features = ["dynamic_linking"] }
+bevy_dylib = "0.13.2"
+bevy_rapier3d = { version = "0.26.0", features = [ "enhanced-determinism", "parallel" ] }
+rand = "0.8.5"
+big_space = "0.6.0"
+bevy_framepace = { version = "0.15.0", default-features = false }
+bevy-scene-hook = "10.0.0"
+
+[profile.release.package."*"]
+opt-level = 3
+
+[[bin]]
+name = "experiment_001"
+
+[[bin]]
+name = "experiment_002"
