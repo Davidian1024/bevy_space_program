@@ -15,6 +15,9 @@ rand = "0.8.5"
 big_space = "0.6.0"
 bevy_framepace = { version = "0.15.0", default-features = false }
 bevy-scene-hook = "10.0.0"
+anyhow = "1.0.85"
+futures-lite = "2.3.0"
+image = "0.25.1"
 
 [profile.release.package."*"]
 opt-level = 3
