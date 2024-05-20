@@ -4,6 +4,7 @@ use bevy::{
     log::Level,
     prelude::*,
     render::{camera::ScalingMode, view::RenderLayers},
+    sprite::{MaterialMesh2dBundle, Mesh2dHandle},
     transform::TransformSystem,
     utils::tracing::span,
     window::{CursorGrabMode, PresentMode, PrimaryWindow, WindowMode},
@@ -20,6 +21,7 @@ use big_space::{
 
 const BACKGROUND: RenderLayers = RenderLayers::layer(1);
 const FOREGROUND: RenderLayers = RenderLayers::layer(2);
+const OVERLAY: RenderLayers = RenderLayers::layer(3);
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
 enum AppState {
@@ -27,6 +29,9 @@ enum AppState {
     PreRunning,
     Running,
 }
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct OverlayGizmos {}
 
 fn main() {
     println!("main() start");
@@ -46,6 +51,7 @@ fn main() {
         ))
         .add_plugins(HookPlugin)
         .add_plugins(MipmapGeneratorPlugin)
+        .init_gizmo_group::<OverlayGizmos>()
         .insert_resource(MipmapGeneratorSettings {
             anisotropic_filtering: 16,
             ..default()
@@ -75,7 +81,12 @@ fn main() {
         )
         .add_systems(
             Update,
-            (setup, ui_setup, generate_mipmaps::<StandardMaterial>)
+            (
+                setup,
+                ui_setup,
+                overlay_render_setup,
+                generate_mipmaps::<StandardMaterial>,
+            )
                 .run_if(in_state(AppState::PreRunning)),
         )
         .add_systems(
@@ -90,7 +101,7 @@ fn main() {
             PostUpdate,
             (
                 ui_text_system,
-                highlight_nearest_sphere.after(TransformSystem::TransformPropagate),
+                highlight_nearest_object.after(TransformSystem::TransformPropagate),
             )
                 .run_if(in_state(AppState::Running)),
         )
@@ -177,7 +188,13 @@ pub struct Planet;
 pub struct HUD;
 
 #[derive(Component)]
+pub struct TargetDisplay;
+
+#[derive(Component)]
 pub struct FloatingOriginPlaceholderComponent;
+
+#[derive(Component)]
+pub struct Crosshair;
 
 fn floating_origin_workaround(mut commands: Commands, space: Res<RootReferenceFrame<i64>>) {
     let span = span!(Level::INFO, "floating_origin_workaround()");
@@ -235,6 +252,7 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut color_materials: ResMut<Assets<ColorMaterial>>,
     space: Res<RootReferenceFrame<i64>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut cam: ResMut<CameraInput>,
@@ -277,6 +295,230 @@ fn setup(
                 ));
             });
     }
+
+    commands.spawn((
+        OVERLAY,
+        Camera2dBundle {
+            camera: Camera {
+                order: 3,
+                ..default()
+            },
+            ..default()
+        },
+    ));
+    let short_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(10.0, 1.0)));
+    let short_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 10.0)));
+    let long_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(2000.0, 1.0)));
+    let long_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 2000.0)));
+    let color = match Color::hex("FE9F00") {
+        Ok(c) => c,
+        Err(_) => Color::rgb(1.0, 1.0, 1.0),
+    };
+    commands
+        .spawn((
+            OVERLAY,
+            Crosshair,
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::Hidden,
+            InheritedVisibility::HIDDEN,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    visibility: Visibility::Inherited,
+                    inherited_visibility: InheritedVisibility::HIDDEN,
+                    mesh: long_horizontal.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -1100.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: long_horizontal.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 1100.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: long_vertical.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 0.0,
+                            y: -1100.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: long_vertical.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 0.0,
+                            y: 1100.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_horizontal.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 25.0,
+                            y: 30.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_horizontal.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -25.0,
+                            y: -30.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_horizontal.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -25.0,
+                            y: 30.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_horizontal.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 25.0,
+                            y: -30.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_vertical.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 30.0,
+                            y: 25.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_vertical.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -30.0,
+                            y: -25.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_vertical.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -30.0,
+                            y: 25.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_vertical.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 30.0,
+                            y: -25.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(color),
+                    ..default()
+                },
+            ));
+        });
 
     let hud_cam_transform = Transform::from_xyz(-7.5, 3.75, 3.0);
     debug!("hud_cam_transform: {:?}", hud_cam_transform);
@@ -371,7 +613,7 @@ fn setup(
         },
     ));
 
-    /* Origin Ball */
+    /* Planet */
     let mesh_handle = meshes.add(Sphere::new(100.0).mesh().ico(32).unwrap());
     let matl_handle = materials.add(StandardMaterial {
         base_color: Color::ORANGE_RED,
@@ -379,10 +621,10 @@ fn setup(
         reflectance: 1.0,
         ..default()
     });
-    let (origin_ball_cell, origin_ball_pos): (GridCell<i64>, _) =
+    let (planet_cell, planet_pos): (GridCell<i64>, _) =
         space.imprecise_translation_to_grid(Vec3::ZERO);
-    let origin_ball_transform = Transform::from_translation(origin_ball_pos);
-    debug!("origin_ball_transform: {:?}", origin_ball_transform);
+    let planet_transform = Transform::from_translation(planet_pos);
+    debug!("planet_transform: {:?}", planet_transform);
 
     commands.spawn((
         BACKGROUND,
@@ -393,10 +635,10 @@ fn setup(
         PbrBundle {
             mesh: mesh_handle.clone(),
             material: matl_handle.clone(),
-            transform: origin_ball_transform,
+            transform: planet_transform,
             ..default()
         },
-        origin_ball_cell,
+        planet_cell,
     ));
 
     /* CubeSat */
@@ -482,7 +724,7 @@ pub struct DebugHudText;
 fn ui_setup(
     mut commands: Commands,
     mut state: ResMut<NextState<AppState>>,
-    mut gizmo_config_store: ResMut<GizmoConfigStore>,
+    mut config_store: ResMut<GizmoConfigStore>,
 ) {
     commands.spawn((
         FOREGROUND,
@@ -504,11 +746,37 @@ fn ui_setup(
         DebugHudText,
         IgnoreFloatingOrigin,
     ));
-    state.set(AppState::Running);
 
-    for (_, each_gizmo_config_store, _) in gizmo_config_store.iter_mut() {
-        each_gizmo_config_store.render_layers = BACKGROUND;
-    }
+    commands.spawn((
+        BACKGROUND,
+        TextBundle::from_section(
+            "No Target",
+            TextStyle {
+                font_size: 18.0,
+                color: Color::WHITE,
+                ..default()
+            },
+        )
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            top: Val::Px(10.0),
+            right: Val::Px(10.0),
+            ..default()
+        }),
+        TargetDisplay,
+    ));
+
+    let (default_gizmo_config, _) = config_store.config_mut::<DefaultGizmoConfigGroup>();
+    default_gizmo_config.render_layers = BACKGROUND;
+    let (overlay_gizmo_config, _) = config_store.config_mut::<OverlayGizmos>();
+    overlay_gizmo_config.render_layers = OVERLAY;
+
+    state.set(AppState::Running);
+}
+
+fn overlay_render_setup(mut overlay_gizmos: Gizmos<OverlayGizmos>, time: Res<Time>) {
+    let sin = time.elapsed_seconds().sin() * 50.;
+    overlay_gizmos.line_2d(Vec2::Y * -sin, Vec2::splat(-80.), Color::RED);
 }
 
 #[allow(clippy::type_complexity)]
@@ -571,21 +839,118 @@ fn ui_text_system(
     );
 }
 
-fn highlight_nearest_sphere(
+fn highlight_nearest_object(
+    camera_3d_query: Query<
+        (&mut Camera, &mut Transform, &GlobalTransform),
+        (With<CameraController>, With<Camera3d>, Without<Camera2d>),
+    >,
     cameras: Query<&CameraController>,
-    objects: Query<&GlobalTransform>,
+    objects: Query<&GlobalTransform, Without<Crosshair>>,
     mut gizmos: Gizmos,
+    mut target_display_query: Query<&mut Text, With<TargetDisplay>>,
+    mut crosshair_transform_query: Query<
+        &mut Transform,
+        (With<Crosshair>, Without<Camera3d>, Without<Camera2d>),
+    >,
+    mut crosshair_visibility_query: Query<&mut Visibility, With<Crosshair>>,
+    camera_2d_query: Query<
+        (&mut Camera, &mut Transform, &GlobalTransform),
+        (With<Camera2d>, Without<Camera3d>),
+    >,
 ) {
+    let span = span!(Level::INFO, "highlight_nearest_object()");
+    let _enter = span.enter();
+    // debug!("start");
     let Some((entity, _)) = cameras.single().nearest_object() else {
+        debug!("cameras.single().nearest_object() returned none");
         return;
     };
     let Ok(transform) = objects.get(entity) else {
+        debug!("objects.get(entity) did not return ok");
         return;
     };
     let (scale, rotation, translation) = transform.to_scale_rotation_translation();
     gizmos
-        .sphere(translation, rotation, scale.x * 0.505, Color::RED)
+        .sphere(translation, rotation, scale.x * 1.0, Color::RED)
         .circle_segments(128);
+
+    let (camera_3d, _camera_3d_transform, camera_3d_global_transform) = camera_3d_query.single();
+
+    let mut crosshair_transform = crosshair_transform_query.single_mut();
+
+    let mut crosshair_visibility = crosshair_visibility_query.single_mut();
+
+    let (camera_2d, _camera_2d_transform, camera_2d_global_transform) = camera_2d_query.single();
+
+    let Some(camera_2d_viewport_rect) = camera_2d.logical_viewport_rect() else {
+        debug!("camera_2d.logical_viewport_rect() returned none");
+        return;
+    };
+
+    let target_text;
+    let target_text_x = format!("{:>20}", translation.x);
+    let target_text_y = format!("{:>20}", translation.y);
+    let target_text_z = format!("{:>20}", translation.z);
+    let mut overlay_text_x = "".to_string();
+    let mut overlay_text_y = "".to_string();
+
+    match target_display_query.get_single_mut() {
+        Ok(mut target_display) => {
+            match camera_3d.world_to_viewport(camera_3d_global_transform, translation) {
+                Some(viewport_position) => {
+                    match (
+                        camera_2d_viewport_rect.contains(viewport_position),
+                        camera_2d
+                            .viewport_to_world_2d(camera_2d_global_transform, viewport_position),
+                    ) {
+                        (true, Some(overlay_position)) => {
+                            *crosshair_visibility = Visibility::Visible;
+                            crosshair_transform.translation.x = overlay_position.x;
+                            crosshair_transform.translation.y = overlay_position.y;
+
+                            target_text = "target onscreen";
+                            overlay_text_x = format!("{:>20}", overlay_position.x);
+                            overlay_text_y = format!("{:>20}", overlay_position.y);
+                        }
+                        (false, Some(overlay_position)) => {
+                            *crosshair_visibility = Visibility::Hidden;
+
+                            target_text = "target offscreen";
+                            overlay_text_x = format!("{:>20}", overlay_position.x);
+                            overlay_text_y = format!("{:>20}", overlay_position.y);
+                        }
+                        (true, None) => {
+                            *crosshair_visibility = Visibility::Visible;
+                            target_text = "target onscreen";
+                        }
+                        (false, None) => {
+                            *crosshair_visibility = Visibility::Hidden;
+                            target_text = "target offscreen";
+                        }
+                    }
+                }
+                None => {
+                    *crosshair_visibility = Visibility::Hidden;
+                    target_text = "target is behind us";
+                }
+            };
+
+            target_display.sections[0].value = format!(
+                "{}\n\n{}\n{}\n{}\n\n{}\n{}",
+                target_text,
+                target_text_x,
+                target_text_y,
+                target_text_z,
+                overlay_text_x,
+                overlay_text_y,
+            );
+        }
+        Err(e) => {
+            debug!("{:?}", e)
+        }
+    };
+
+    // debug!("stop");
 }
 
 fn modify_gravity(
@@ -668,6 +1033,7 @@ fn spawn(
                 transform: spawn_transform,
                 ..default()
             },
+            HUD,
         ));
     }
 }
@@ -776,7 +1142,6 @@ fn update_hud(
     let _enter = span.enter();
     let camera_grid = camera_grid_query.single();
     let mut camera_rotation = camera_grid.transform.rotation;
-    debug!("camera rotation: {:?}", camera_rotation);
     let planet_transform = planet_transform_query.single();
     let mut camera_looking_at_planet_rotation = camera_grid
         .transform
@@ -786,14 +1151,9 @@ fn update_hud(
         )
         .rotation
         .inverse();
-    debug!(
-        "camera looking_at planet: {:?}",
-        camera_looking_at_planet_rotation
-    );
     camera_rotation.z = -camera_rotation.z;
     camera_looking_at_planet_rotation.z = -camera_looking_at_planet_rotation.z;
     let camera_rotations_combined = camera_rotation * camera_looking_at_planet_rotation;
-    debug!("camera_rotations_combined: {:?}", camera_rotations_combined);
     for mut each_hud_transform in hud_transform_query.iter_mut() {
         let final_rotation = camera_rotations_combined;
         each_hud_transform.rotation = final_rotation;
