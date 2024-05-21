@@ -72,8 +72,7 @@ fn main() {
         .insert_resource(Msaa::Sample8)
         .add_systems(
             Startup,
-            (initiate_asset_loading, floating_origin_workaround)
-                .run_if(in_state(AppState::Loading)),
+            (initiate_asset_loading, main_camera_setup).run_if(in_state(AppState::Loading)),
         )
         .add_systems(
             Update,
@@ -82,22 +81,21 @@ fn main() {
         .add_systems(
             Update,
             (
-                setup,
+                spawn_initial_scene,
                 ui_setup,
-                overlay_render_setup,
                 generate_mipmaps::<StandardMaterial>,
             )
                 .run_if(in_state(AppState::PreRunning)),
         )
         .add_systems(
             PreUpdate,
-            (cursor_grab_system, spawn).run_if(in_state(AppState::Running)),
+            (miscellaneous_input_handling, spawn_pellet).run_if(in_state(AppState::Running)),
         )
         .add_systems(Update, update_hud.run_if(in_state(AppState::Running)))
         .add_systems(
             PostUpdate,
             (
-                ui_text_system,
+                update_ui_text,
                 highlight_nearest_object.after(TransformSystem::TransformPropagate),
             )
                 .run_if(in_state(AppState::Running)),
@@ -193,8 +191,8 @@ pub struct FloatingOriginPlaceholderComponent;
 #[derive(Component)]
 pub struct Crosshair;
 
-fn floating_origin_workaround(mut commands: Commands, space: Res<RootReferenceFrame<i64>>) {
-    let span = span!(Level::INFO, "floating_origin_workaround()");
+fn main_camera_setup(mut commands: Commands, space: Res<RootReferenceFrame<i64>>) {
+    let span = span!(Level::INFO, "main_camera_setup()");
     let _enter = span.enter();
     debug!("start");
     let (cam_cell, cam_pos) = space.imprecise_translation_to_grid(Vec3 {
@@ -246,7 +244,7 @@ fn initiate_asset_loading(mut commands: Commands, asset_server: Res<AssetServer>
     debug!("stop");
 }
 
-fn setup(
+fn spawn_initial_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -778,13 +776,8 @@ fn ui_setup(
     state.set(AppState::Running);
 }
 
-fn overlay_render_setup(mut overlay_gizmos: Gizmos<OverlayGizmos>, time: Res<Time>) {
-    let sin = time.elapsed_seconds().sin() * 50.;
-    overlay_gizmos.line_2d(Vec2::Y * -sin, Vec2::splat(-80.), Color::RED);
-}
-
 #[allow(clippy::type_complexity)]
-fn ui_text_system(
+fn update_ui_text(
     mut debug_text: Query<(&mut Text, &GlobalTransform), With<DebugHudText>>,
     time: Res<Time>,
     origin: Query<GridTransformReadOnly<i64>, With<FloatingOrigin>>,
@@ -943,7 +936,7 @@ fn highlight_nearest_object(
     // debug!("stop");
 }
 
-fn spawn(
+fn spawn_pellet(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1010,7 +1003,7 @@ fn spawn(
     }
 }
 
-fn cursor_grab_system(
+fn miscellaneous_input_handling(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut cam: ResMut<CameraInput>,
     btn: Res<ButtonInput<MouseButton>>,
