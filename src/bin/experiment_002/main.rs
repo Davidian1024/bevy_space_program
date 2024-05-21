@@ -15,7 +15,7 @@ use bevy_space_program::{generate_mipmaps, MipmapGeneratorPlugin, MipmapGenerato
 use big_space::{
     camera::{CameraController, CameraInput},
     reference_frame::RootReferenceFrame,
-    world_query::GridTransformReadOnly,
+    world_query::{GridTransform, GridTransformReadOnly},
     FloatingOrigin, GridCell, IgnoreFloatingOrigin,
 };
 
@@ -56,18 +56,18 @@ fn main() {
             anisotropic_filtering: 16,
             ..default()
         })
-        .insert_resource(RapierConfiguration {
-            gravity: Vec3::ZERO,
-            physics_pipeline_active: true,
-            query_pipeline_active: true,
-            timestep_mode: TimestepMode::Interpolated {
-                dt: 0.016666667,
-                time_scale: 1.0,
-                substeps: 1,
-            },
-            scaled_shape_subdivision: 2,
-            force_update_from_transform_changes: true,
-        })
+        // .insert_resource(RapierConfiguration {
+        //     gravity: Vec3::ZERO,
+        //     physics_pipeline_active: true,
+        //     query_pipeline_active: true,
+        //     timestep_mode: TimestepMode::Interpolated {
+        //         dt: 0.016666667,
+        //         time_scale: 1.0,
+        //         substeps: 1,
+        //     },
+        //     scaled_shape_subdivision: 2,
+        //     force_update_from_transform_changes: true,
+        // })
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(Msaa::Sample8)
         .add_systems(
@@ -93,10 +93,7 @@ fn main() {
             PreUpdate,
             (cursor_grab_system, spawn).run_if(in_state(AppState::Running)),
         )
-        .add_systems(
-            Update,
-            (modify_gravity, update_hud).run_if(in_state(AppState::Running)),
-        )
+        .add_systems(Update, update_hud.run_if(in_state(AppState::Running)))
         .add_systems(
             PostUpdate,
             (
@@ -207,6 +204,7 @@ fn floating_origin_workaround(mut commands: Commands, space: Res<RootReferenceFr
     });
     let cam_transform = Transform::from_translation(cam_pos);
     debug!("cam_transform: {:?}", cam_transform);
+    /* Floating Origin Camera */
     commands.spawn((
         BACKGROUND,
         Camera3dBundle {
@@ -273,6 +271,7 @@ fn setup(
         commands
             .entity(each_perspective_hud_entity)
             .with_children(|parent| {
+                /* Perspective NavBall */
                 parent.spawn((
                     BACKGROUND,
                     HookedSceneBundle {
@@ -296,6 +295,7 @@ fn setup(
             });
     }
 
+    /* Overlay Camera */
     commands.spawn((
         OVERLAY,
         Camera2dBundle {
@@ -314,6 +314,7 @@ fn setup(
         Ok(c) => c,
         Err(_) => Color::rgb(1.0, 1.0, 1.0),
     };
+    /* Crosshair */
     commands
         .spawn((
             OVERLAY,
@@ -523,6 +524,7 @@ fn setup(
     let hud_cam_transform = Transform::from_xyz(-7.5, 3.75, 3.0);
     debug!("hud_cam_transform: {:?}", hud_cam_transform);
 
+    /* Orthographic Camera */
     commands.spawn((
         FOREGROUND,
         Camera3dBundle {
@@ -545,6 +547,7 @@ fn setup(
         IgnoreFloatingOrigin,
     ));
 
+    /* Orthographic NavBall */
     commands.spawn((
         FOREGROUND,
         HookedSceneBundle {
@@ -568,6 +571,7 @@ fn setup(
         },
         HUD,
     ));
+    /* Orthographic NavRing */
     commands.spawn((
         FOREGROUND,
         HookedSceneBundle {
@@ -590,6 +594,7 @@ fn setup(
             },
         },
     ));
+    /* Orthographic Light */
     commands.spawn((
         FOREGROUND,
         DirectionalLightBundle {
@@ -601,7 +606,7 @@ fn setup(
             ..default()
         },
     ));
-
+    /* Perspective Light */
     commands.spawn((
         BACKGROUND,
         DirectionalLightBundle {
@@ -613,7 +618,6 @@ fn setup(
         },
     ));
 
-    /* Planet */
     let mesh_handle = meshes.add(Sphere::new(100.0).mesh().ico(32).unwrap());
     let matl_handle = materials.add(StandardMaterial {
         base_color: Color::ORANGE_RED,
@@ -625,7 +629,7 @@ fn setup(
         space.imprecise_translation_to_grid(Vec3::ZERO);
     let planet_transform = Transform::from_translation(planet_pos);
     debug!("planet_transform: {:?}", planet_transform);
-
+    /* Planet */
     commands.spawn((
         BACKGROUND,
         Planet,
@@ -641,7 +645,6 @@ fn setup(
         planet_cell,
     ));
 
-    /* CubeSat */
     let mesh_handle = meshes.add(Cuboid::default());
     let matl_handle = materials.add(StandardMaterial {
         base_color: Color::AQUAMARINE,
@@ -652,17 +655,15 @@ fn setup(
     let (cube_sat_cell, cube_sat_pos): (GridCell<i64>, _) =
         space.imprecise_translation_to_grid(Vec3 {
             x: -190.0,
-            y: 0.0,
+            y: 3.0,
             z: 0.0,
         });
+    /* CubeSat (moving) */
     commands.spawn((
         BACKGROUND,
         RigidBody::Dynamic,
+        Collider::cuboid(0.5, 0.5, 0.5),
         GravityScale(0.0),
-        ExternalForce {
-            force: Vec3::ZERO,
-            torque: Vec3::ZERO,
-        },
         Velocity {
             linvel: Vec3 {
                 x: 0.0,
@@ -671,7 +672,7 @@ fn setup(
             },
             angvel: Vect {
                 x: 0.0,
-                y: 0.0,
+                y: 2.0,
                 z: 0.0,
             },
         },
@@ -689,6 +690,7 @@ fn setup(
         reflectance: 1.0,
         ..default()
     });
+    /* CubeSat (stationary; spinning) */
     commands.spawn((
         BACKGROUND,
         RigidBody::KinematicVelocityBased,
@@ -726,6 +728,7 @@ fn ui_setup(
     mut state: ResMut<NextState<AppState>>,
     mut config_store: ResMut<GizmoConfigStore>,
 ) {
+    /* DebugHudText */
     commands.spawn((
         FOREGROUND,
         TextBundle::from_section(
@@ -747,6 +750,7 @@ fn ui_setup(
         IgnoreFloatingOrigin,
     ));
 
+    /* TargetDisplay */
     commands.spawn((
         BACKGROUND,
         TextBundle::from_section(
@@ -785,7 +789,6 @@ fn ui_text_system(
     time: Res<Time>,
     origin: Query<GridTransformReadOnly<i64>, With<FloatingOrigin>>,
     camera: Query<&CameraController>,
-    objects: Query<(&Transform, &GridCell<i64>), (With<Handle<Mesh>>, Without<Planet>)>,
     reference_frame: Res<RootReferenceFrame<i64>>,
 ) {
     let origin = origin.single();
@@ -819,23 +822,10 @@ fn ui_text_system(
         format!("Speed: {:.2e} m/s", speed)
     };
 
-    let mut objects_text = "objects:\n".to_string();
-    for (each_object_transform, each_object_grid) in objects.iter() {
-        objects_text += &format!(
-            "translation:\nx:{:0>10}, y:{:0>10}, z:{:0>10}\ngrid\nx:{:0>10}, y:{:0>10}, z:{:0>10}\n",
-            each_object_transform.translation.x,
-            each_object_transform.translation.y,
-            each_object_transform.translation.z,
-            each_object_grid.x,
-            each_object_grid.y,
-            each_object_grid.z,
-        );
-    }
-
     let mut debug_text = debug_text.single_mut();
 
     debug_text.0.sections[0].value = format!(
-        "{grid_text}\n{translation_text}\n\n{real_position_f64_text}\n{real_position_f32_text}\n\n{camera_text}\n\n{objects_text}"
+        "{grid_text}\n{translation_text}\n\n{real_position_f64_text}\n{real_position_f32_text}\n\n{camera_text}"
     );
 }
 
@@ -953,34 +943,13 @@ fn highlight_nearest_object(
     // debug!("stop");
 }
 
-fn modify_gravity(
-    mut rigid_body_query: Query<
-        (&Transform, &Collider, &mut ExternalForce),
-        (With<RigidBody>, Without<Planet>),
-    >,
-) {
-    for (each_rigid_body_transform, each_rigid_body_collider, mut each_external_force) in
-        rigid_body_query.iter_mut()
-    {
-        let d = (Vec3::ZERO - each_rigid_body_transform.translation)
-            .length()
-            .abs();
-        let m1 = each_rigid_body_collider.raw.mass_properties(1.0).mass();
-        let m2 = 10000000000000.0;
-        let g = 6.67430e-11;
-        let f = (g * m1 * m2) / d.powf(2.0);
-        let gfv = -(each_rigid_body_transform.translation.normalize() * f);
-        each_external_force.force = gfv;
-    }
-}
-
 fn spawn(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     btn: Res<ButtonInput<MouseButton>>,
-    cam_grid: Query<GridTransformReadOnly<i64>, With<FloatingOrigin>>,
-    camera_controller: Query<&CameraController>,
+    floating_origin_grid_transform_query: Query<GridTransform<i64>, With<FloatingOrigin>>,
+    camera_controller_query: Query<&CameraController>,
 ) {
     let capsule = Capsule3d::new(0.1, 0.2);
     let mesh_handle = meshes.add(capsule);
@@ -991,18 +960,30 @@ fn spawn(
         ..default()
     });
 
-    let single_cam_grid = cam_grid.single();
-    let single_cam_cont = camera_controller.single();
+    let floating_origin_grid_transform = floating_origin_grid_transform_query.single();
+    let camera_controller = camera_controller_query.single();
     let spawn_transform = Transform {
-        translation: single_cam_grid.transform.translation
-            + (single_cam_grid.transform.forward() * 1.0),
-        rotation: single_cam_grid.transform.rotation,
-        scale: Vec3::ONE,
+        translation: floating_origin_grid_transform.transform.translation
+            + (floating_origin_grid_transform.transform.forward() * 2.0),
+        rotation: floating_origin_grid_transform.transform.rotation,
+        ..default()
     };
+    let spawn_velocity = Velocity {
+        linvel: camera_controller.velocity().0.as_vec3()
+            + (floating_origin_grid_transform.transform.forward() * 10.0),
+        angvel: Vec3 {
+            x: 2.1,
+            y: 2.2,
+            z: 2.3,
+        },
+        ..default()
+    };
+
     if btn.just_pressed(MouseButton::Right) {
+        /* Pellet */
         commands.spawn((
             BACKGROUND,
-            *single_cam_grid.cell,
+            *floating_origin_grid_transform.cell,
             RigidBody::Dynamic,
             Collider::capsule(
                 Vec3 {
@@ -1018,22 +999,13 @@ fn spawn(
                 0.1,
             ),
             GravityScale(0.0),
-            Velocity {
-                linvel: single_cam_cont.velocity().0.as_vec3()
-                    + (single_cam_grid.transform.forward() * 10.0),
-                angvel: Vect {
-                    x: 1.0,
-                    y: 1.1,
-                    z: 1.2,
-                },
-            },
+            spawn_velocity,
             PbrBundle {
                 mesh: mesh_handle,
                 material: matl_handle,
                 transform: spawn_transform,
                 ..default()
             },
-            HUD,
         ));
     }
 }
