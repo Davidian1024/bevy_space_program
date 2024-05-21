@@ -1,3 +1,5 @@
+use std::f32::consts::PI;
+
 use bevy::{
     app::AppExit,
     core_pipeline::core_3d::Camera3dDepthLoadOp,
@@ -56,18 +58,18 @@ fn main() {
             anisotropic_filtering: 16,
             ..default()
         })
-        // .insert_resource(RapierConfiguration {
-        //     gravity: Vec3::ZERO,
-        //     physics_pipeline_active: true,
-        //     query_pipeline_active: true,
-        //     timestep_mode: TimestepMode::Interpolated {
-        //         dt: 0.016666667,
-        //         time_scale: 1.0,
-        //         substeps: 1,
-        //     },
-        //     scaled_shape_subdivision: 2,
-        //     force_update_from_transform_changes: true,
-        // })
+        .insert_resource(RapierConfiguration {
+            gravity: Vec3::ZERO,
+            physics_pipeline_active: true,
+            query_pipeline_active: true,
+            timestep_mode: TimestepMode::Interpolated {
+                dt: 0.016666667,
+                time_scale: 1.0,
+                substeps: 1,
+            },
+            scaled_shape_subdivision: 2,
+            force_update_from_transform_changes: true,
+        })
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(Msaa::Sample8)
         .add_systems(
@@ -81,7 +83,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                spawn_initial_scene,
+                general_setup,
                 ui_setup,
                 generate_mipmaps::<StandardMaterial>,
             )
@@ -96,7 +98,7 @@ fn main() {
             PostUpdate,
             (
                 update_ui_text,
-                highlight_nearest_object.after(TransformSystem::TransformPropagate),
+                update_hud_reticles.after(TransformSystem::TransformPropagate),
             )
                 .run_if(in_state(AppState::Running)),
         )
@@ -176,6 +178,11 @@ pub struct SceneAssets {
     pub inverted_xyz_ball_scene: Handle<Scene>,
 }
 
+#[derive(Resource, Debug)]
+pub struct TargetResource {
+    target: Option<Entity>,
+}
+
 #[derive(Component)]
 pub struct Planet;
 
@@ -189,7 +196,10 @@ pub struct TargetDisplay;
 pub struct FloatingOriginPlaceholderComponent;
 
 #[derive(Component)]
-pub struct Crosshair;
+pub struct TargetObjectCrosshair;
+
+#[derive(Component)]
+pub struct NearestObjectCrosshair;
 
 fn main_camera_setup(mut commands: Commands, space: Res<RootReferenceFrame<i64>>) {
     let span = span!(Level::INFO, "main_camera_setup()");
@@ -244,7 +254,7 @@ fn initiate_asset_loading(mut commands: Commands, asset_server: Res<AssetServer>
     debug!("stop");
 }
 
-fn spawn_initial_scene(
+fn general_setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -304,11 +314,91 @@ fn spawn_initial_scene(
             ..default()
         },
     ));
+
+    /* Camera Reticle */
+    let small_triangle = Mesh2dHandle(meshes.add(Triangle2d::new(
+        Vec2::ZERO,
+        Vec2 { x: 10.0, y: 0.0 },
+        Vec2 { x: 0.0, y: 10.0 },
+    )));
+    let camera_reticle_color = match Color::hex("B2AFC2") {
+        Ok(c) => c,
+        Err(_) => Color::rgb(1.0, 1.0, 1.0),
+    };
+    commands.spawn((
+        OVERLAY,
+        MaterialMesh2dBundle {
+            mesh: small_triangle.clone(),
+            material: color_materials.add(camera_reticle_color),
+            transform: Transform {
+                translation: Vec3 {
+                    x: 10.0,
+                    y: 10.0,
+                    z: 0.0,
+                },
+                ..default()
+            },
+            ..default()
+        },
+    ));
+    commands.spawn((
+        OVERLAY,
+        MaterialMesh2dBundle {
+            mesh: small_triangle.clone(),
+            material: color_materials.add(camera_reticle_color),
+            transform: Transform {
+                translation: Vec3 {
+                    x: -10.0,
+                    y: 10.0,
+                    z: 0.0,
+                },
+                rotation: Quat::from_rotation_z(PI / 2.0),
+                ..default()
+            },
+            ..default()
+        },
+    ));
+    commands.spawn((
+        OVERLAY,
+        MaterialMesh2dBundle {
+            mesh: small_triangle.clone(),
+            material: color_materials.add(camera_reticle_color),
+            transform: Transform {
+                translation: Vec3 {
+                    x: -10.0,
+                    y: -10.0,
+                    z: 0.0,
+                },
+                rotation: Quat::from_rotation_z(PI),
+                ..default()
+            },
+            ..default()
+        },
+    ));
+    commands.spawn((
+        OVERLAY,
+        MaterialMesh2dBundle {
+            mesh: small_triangle.clone(),
+            material: color_materials.add(camera_reticle_color),
+            transform: Transform {
+                translation: Vec3 {
+                    x: 10.0,
+                    y: -10.0,
+                    z: 0.0,
+                },
+                rotation: Quat::from_rotation_z(-PI / 2.0),
+                ..default()
+            },
+            ..default()
+        },
+    ));
+
+    /* Crosshair */
     let short_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(10.0, 1.0)));
     let short_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 10.0)));
-    let long_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(2000.0, 1.0)));
-    let long_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 2000.0)));
-    let color = match Color::hex("FE9F00") {
+    // let long_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(2000.0, 1.0)));
+    // let long_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 2000.0)));
+    let crosshair_color = match Color::hex("FE9F00") {
         Ok(c) => c,
         Err(_) => Color::rgb(1.0, 1.0, 1.0),
     };
@@ -316,7 +406,157 @@ fn spawn_initial_scene(
     commands
         .spawn((
             OVERLAY,
-            Crosshair,
+            NearestObjectCrosshair,
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::Hidden,
+            InheritedVisibility::HIDDEN,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_horizontal.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 25.0,
+                            y: 30.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(crosshair_color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_horizontal.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -25.0,
+                            y: -30.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(crosshair_color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_horizontal.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -25.0,
+                            y: 30.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(crosshair_color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_horizontal.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 25.0,
+                            y: -30.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(crosshair_color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_vertical.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 30.0,
+                            y: 25.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(crosshair_color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_vertical.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -30.0,
+                            y: -25.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(crosshair_color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_vertical.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -30.0,
+                            y: 25.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(crosshair_color),
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: short_vertical.clone(),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 30.0,
+                            y: -25.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    material: color_materials.add(crosshair_color),
+                    ..default()
+                },
+            ));
+        });
+
+    /* Crosshair */
+    // let short_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(10.0, 1.0)));
+    // let short_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 10.0)));
+    let long_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(2000.0, 1.0)));
+    let long_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 2000.0)));
+    // let crosshair_color = match Color::hex("FE9F00") {
+    //     Ok(c) => c,
+    //     Err(_) => Color::rgb(1.0, 1.0, 1.0),
+    // };
+    /* Crosshair */
+    commands
+        .spawn((
+            OVERLAY,
+            TargetObjectCrosshair,
             Transform::default(),
             GlobalTransform::default(),
             Visibility::Hidden,
@@ -337,7 +577,7 @@ fn spawn_initial_scene(
                         },
                         ..default()
                     },
-                    material: color_materials.add(color),
+                    material: color_materials.add(crosshair_color),
                     ..default()
                 },
             ));
@@ -353,7 +593,7 @@ fn spawn_initial_scene(
                         },
                         ..default()
                     },
-                    material: color_materials.add(color),
+                    material: color_materials.add(crosshair_color),
                     ..default()
                 },
             ));
@@ -369,7 +609,7 @@ fn spawn_initial_scene(
                         },
                         ..default()
                     },
-                    material: color_materials.add(color),
+                    material: color_materials.add(crosshair_color),
                     ..default()
                 },
             ));
@@ -385,139 +625,13 @@ fn spawn_initial_scene(
                         },
                         ..default()
                     },
-                    material: color_materials.add(color),
-                    ..default()
-                },
-            ));
-            parent.spawn((
-                OVERLAY,
-                MaterialMesh2dBundle {
-                    mesh: short_horizontal.clone(),
-                    transform: Transform {
-                        translation: Vec3 {
-                            x: 25.0,
-                            y: 30.0,
-                            z: 0.0,
-                        },
-                        ..default()
-                    },
-                    material: color_materials.add(color),
-                    ..default()
-                },
-            ));
-            parent.spawn((
-                OVERLAY,
-                MaterialMesh2dBundle {
-                    mesh: short_horizontal.clone(),
-                    transform: Transform {
-                        translation: Vec3 {
-                            x: -25.0,
-                            y: -30.0,
-                            z: 0.0,
-                        },
-                        ..default()
-                    },
-                    material: color_materials.add(color),
-                    ..default()
-                },
-            ));
-            parent.spawn((
-                OVERLAY,
-                MaterialMesh2dBundle {
-                    mesh: short_horizontal.clone(),
-                    transform: Transform {
-                        translation: Vec3 {
-                            x: -25.0,
-                            y: 30.0,
-                            z: 0.0,
-                        },
-                        ..default()
-                    },
-                    material: color_materials.add(color),
-                    ..default()
-                },
-            ));
-            parent.spawn((
-                OVERLAY,
-                MaterialMesh2dBundle {
-                    mesh: short_horizontal.clone(),
-                    transform: Transform {
-                        translation: Vec3 {
-                            x: 25.0,
-                            y: -30.0,
-                            z: 0.0,
-                        },
-                        ..default()
-                    },
-                    material: color_materials.add(color),
-                    ..default()
-                },
-            ));
-            parent.spawn((
-                OVERLAY,
-                MaterialMesh2dBundle {
-                    mesh: short_vertical.clone(),
-                    transform: Transform {
-                        translation: Vec3 {
-                            x: 30.0,
-                            y: 25.0,
-                            z: 0.0,
-                        },
-                        ..default()
-                    },
-                    material: color_materials.add(color),
-                    ..default()
-                },
-            ));
-            parent.spawn((
-                OVERLAY,
-                MaterialMesh2dBundle {
-                    mesh: short_vertical.clone(),
-                    transform: Transform {
-                        translation: Vec3 {
-                            x: -30.0,
-                            y: -25.0,
-                            z: 0.0,
-                        },
-                        ..default()
-                    },
-                    material: color_materials.add(color),
-                    ..default()
-                },
-            ));
-            parent.spawn((
-                OVERLAY,
-                MaterialMesh2dBundle {
-                    mesh: short_vertical.clone(),
-                    transform: Transform {
-                        translation: Vec3 {
-                            x: -30.0,
-                            y: 25.0,
-                            z: 0.0,
-                        },
-                        ..default()
-                    },
-                    material: color_materials.add(color),
-                    ..default()
-                },
-            ));
-            parent.spawn((
-                OVERLAY,
-                MaterialMesh2dBundle {
-                    mesh: short_vertical.clone(),
-                    transform: Transform {
-                        translation: Vec3 {
-                            x: 30.0,
-                            y: -25.0,
-                            z: 0.0,
-                        },
-                        ..default()
-                    },
-                    material: color_materials.add(color),
+                    material: color_materials.add(crosshair_color),
                     ..default()
                 },
             ));
         });
+
+    commands.insert_resource(TargetResource { target: None });
 
     let hud_cam_transform = Transform::from_xyz(-7.5, 3.75, 3.0);
     debug!("hud_cam_transform: {:?}", hud_cam_transform);
@@ -822,28 +936,111 @@ fn update_ui_text(
     );
 }
 
-fn highlight_nearest_object(
+fn update_hud_reticles(
     camera_3d_query: Query<
         (&mut Camera, &mut Transform, &GlobalTransform),
         (With<CameraController>, With<Camera3d>, Without<Camera2d>),
     >,
     cameras: Query<&CameraController>,
-    objects: Query<&GlobalTransform, Without<Crosshair>>,
+    objects: Query<&GlobalTransform, Without<NearestObjectCrosshair>>,
     mut gizmos: Gizmos,
     mut target_display_query: Query<&mut Text, With<TargetDisplay>>,
-    mut crosshair_transform_query: Query<
+    mut nearest_object_crosshair_transform_query: Query<
         &mut Transform,
-        (With<Crosshair>, Without<Camera3d>, Without<Camera2d>),
+        (
+            With<NearestObjectCrosshair>,
+            Without<TargetObjectCrosshair>,
+            Without<Camera3d>,
+            Without<Camera2d>,
+        ),
     >,
-    mut crosshair_visibility_query: Query<&mut Visibility, With<Crosshair>>,
+    mut target_object_crosshair_transform_query: Query<
+        &mut Transform,
+        (
+            With<TargetObjectCrosshair>,
+            Without<NearestObjectCrosshair>,
+            Without<Camera3d>,
+            Without<Camera2d>,
+        ),
+    >,
+    mut nearest_object_crosshair_visibility_query: Query<
+        &mut Visibility,
+        (With<NearestObjectCrosshair>, Without<TargetObjectCrosshair>),
+    >,
+    mut target_object_crosshair_visibility_query: Query<
+        &mut Visibility,
+        (With<TargetObjectCrosshair>, Without<NearestObjectCrosshair>),
+    >,
     camera_2d_query: Query<
         (&mut Camera, &mut Transform, &GlobalTransform),
         (With<Camera2d>, Without<Camera3d>),
     >,
+    key: Res<ButtonInput<KeyCode>>,
+    mut target_resource: ResMut<TargetResource>,
 ) {
-    let span = span!(Level::INFO, "highlight_nearest_object()");
+    let span = span!(Level::INFO, "update_hud_reticles()");
     let _enter = span.enter();
     // debug!("start");
+
+    let (camera_3d, _camera_3d_transform, camera_3d_global_transform) = camera_3d_query.single();
+
+    let (camera_2d, _camera_2d_transform, camera_2d_global_transform) = camera_2d_query.single();
+
+    let Some(camera_2d_viewport_rect) = camera_2d.logical_viewport_rect() else {
+        debug!("camera_2d.logical_viewport_rect() returned none");
+        return;
+    };
+
+    let mut target_object_crosshair_transform =
+        target_object_crosshair_transform_query.single_mut();
+
+    let mut target_object_crosshair_visibility =
+        target_object_crosshair_visibility_query.single_mut();
+
+    match target_resource.target {
+        Some(target) => match objects.get(target) {
+            Ok(target_object) => {
+                let (_target_object_scale, _target_object_rotation, target_object_translation) =
+                    target_object.to_scale_rotation_translation();
+                match camera_3d
+                    .world_to_viewport(camera_3d_global_transform, target_object_translation)
+                {
+                    Some(target_object_viewport_position) => {
+                        match (
+                            camera_2d_viewport_rect.contains(target_object_viewport_position),
+                            camera_2d.viewport_to_world_2d(
+                                camera_2d_global_transform,
+                                target_object_viewport_position,
+                            ),
+                        ) {
+                            (true, Some(target_object_overlay_position)) => {
+                                *target_object_crosshair_visibility = Visibility::Visible;
+                                target_object_crosshair_transform.translation.x =
+                                    target_object_overlay_position.x;
+                                target_object_crosshair_transform.translation.y =
+                                    target_object_overlay_position.y;
+                            }
+                            (false, Some(_target_object_overlay_position)) => {
+                                *target_object_crosshair_visibility = Visibility::Hidden;
+                            }
+                            (true, None) => {
+                                *target_object_crosshair_visibility = Visibility::Visible;
+                            }
+                            (false, None) => {
+                                *target_object_crosshair_visibility = Visibility::Hidden;
+                            }
+                        }
+                    }
+                    None => {
+                        *target_object_crosshair_visibility = Visibility::Hidden;
+                    }
+                }
+            }
+            Err(e) => debug!("{:?}", e),
+        },
+        None => {}
+    }
+
     let Some((entity, _)) = cameras.single().nearest_object() else {
         debug!("cameras.single().nearest_object() returned none");
         return;
@@ -857,18 +1054,16 @@ fn highlight_nearest_object(
         .sphere(translation, rotation, scale.x * 1.0, Color::RED)
         .circle_segments(128);
 
-    let (camera_3d, _camera_3d_transform, camera_3d_global_transform) = camera_3d_query.single();
+    if key.just_pressed(KeyCode::Enter) {
+        target_resource.target = Some(entity);
+        debug!("{:?}", target_resource);
+    }
 
-    let mut crosshair_transform = crosshair_transform_query.single_mut();
+    let mut nearest_object_crosshair_transform =
+        nearest_object_crosshair_transform_query.single_mut();
 
-    let mut crosshair_visibility = crosshair_visibility_query.single_mut();
-
-    let (camera_2d, _camera_2d_transform, camera_2d_global_transform) = camera_2d_query.single();
-
-    let Some(camera_2d_viewport_rect) = camera_2d.logical_viewport_rect() else {
-        debug!("camera_2d.logical_viewport_rect() returned none");
-        return;
-    };
+    let mut nearest_object_crosshair_visibility =
+        nearest_object_crosshair_visibility_query.single_mut();
 
     let target_text;
     let target_text_x = format!("{:>20}", translation.x);
@@ -886,35 +1081,37 @@ fn highlight_nearest_object(
                         camera_2d
                             .viewport_to_world_2d(camera_2d_global_transform, viewport_position),
                     ) {
-                        (true, Some(overlay_position)) => {
-                            *crosshair_visibility = Visibility::Visible;
-                            crosshair_transform.translation.x = overlay_position.x;
-                            crosshair_transform.translation.y = overlay_position.y;
+                        (true, Some(nearest_object_overlay_position)) => {
+                            *nearest_object_crosshair_visibility = Visibility::Visible;
+                            nearest_object_crosshair_transform.translation.x =
+                                nearest_object_overlay_position.x;
+                            nearest_object_crosshair_transform.translation.y =
+                                nearest_object_overlay_position.y;
 
-                            target_text = "target onscreen";
-                            overlay_text_x = format!("{:>20}", overlay_position.x);
-                            overlay_text_y = format!("{:>20}", overlay_position.y);
+                            target_text = "nearest object onscreen";
+                            overlay_text_x = format!("{:>20}", nearest_object_overlay_position.x);
+                            overlay_text_y = format!("{:>20}", nearest_object_overlay_position.y);
                         }
                         (false, Some(overlay_position)) => {
-                            *crosshair_visibility = Visibility::Hidden;
+                            *nearest_object_crosshair_visibility = Visibility::Hidden;
 
-                            target_text = "target offscreen";
+                            target_text = "nearest object offscreen";
                             overlay_text_x = format!("{:>20}", overlay_position.x);
                             overlay_text_y = format!("{:>20}", overlay_position.y);
                         }
                         (true, None) => {
-                            *crosshair_visibility = Visibility::Visible;
-                            target_text = "target onscreen";
+                            *nearest_object_crosshair_visibility = Visibility::Visible;
+                            target_text = "nearest object onscreen";
                         }
                         (false, None) => {
-                            *crosshair_visibility = Visibility::Hidden;
-                            target_text = "target offscreen";
+                            *nearest_object_crosshair_visibility = Visibility::Hidden;
+                            target_text = "nearest object offscreen";
                         }
                     }
                 }
                 None => {
-                    *crosshair_visibility = Visibility::Hidden;
-                    target_text = "target is behind us";
+                    *nearest_object_crosshair_visibility = Visibility::Hidden;
+                    target_text = "nearest object is behind us";
                 }
             };
 
