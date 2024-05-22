@@ -1,11 +1,15 @@
-use std::f32::consts::PI;
+use std::{f32::consts::PI, time::Duration};
 
 use bevy::{
     app::AppExit,
-    core_pipeline::core_3d::Camera3dDepthLoadOp,
+    core_pipeline::{core_3d::Camera3dDepthLoadOp, Skybox},
     log::Level,
     prelude::*,
-    render::{camera::ScalingMode, view::RenderLayers},
+    render::{
+        camera::ScalingMode,
+        render_resource::{TextureViewDescriptor, TextureViewDimension},
+        view::RenderLayers,
+    },
     sprite::{MaterialMesh2dBundle, Mesh2dHandle},
     transform::TransformSystem,
     utils::tracing::span,
@@ -42,15 +46,12 @@ fn main() {
         .add_plugins((
             DefaultPlugins.build().disable::<TransformPlugin>(),
             big_space::FloatingOriginPlugin::<i64>::default(),
-            big_space::debug::FloatingOriginDebugPlugin::<i64>::default(),
+            // big_space::debug::FloatingOriginDebugPlugin::<i64>::default(),
             big_space::camera::CameraControllerPlugin::<i64>::default(),
             bevy_framepace::FramepacePlugin,
-            RapierDebugRenderPlugin::default(),
+            // RapierDebugRenderPlugin::default(),  // Causes Rapier to render meshes representing colliders.
         ))
-        .add_plugins((
-            RapierPhysicsPlugin::<NoUserData>::default(),
-            // RapierPhysicsPlugin::<NoUserData>::default().with_default_system_setup(false),
-        ))
+        .add_plugins((RapierPhysicsPlugin::<NoUserData>::default(),))
         .add_plugins(HookPlugin)
         .add_plugins(MipmapGeneratorPlugin)
         .init_gizmo_group::<OverlayGizmos>()
@@ -93,7 +94,10 @@ fn main() {
             PreUpdate,
             (miscellaneous_input_handling, spawn_pellet).run_if(in_state(AppState::Running)),
         )
-        .add_systems(Update, update_hud.run_if(in_state(AppState::Running)))
+        .add_systems(
+            Update,
+            (tick_timers, update_hud).run_if(in_state(AppState::Running)),
+        )
         .add_systems(
             PostUpdate,
             (
@@ -112,6 +116,8 @@ fn wait_for_asset_loading(
     mesh_assets: Res<MeshAssets>,
     scenes: Res<Assets<Scene>>,
     scene_assets: Res<SceneAssets>,
+    mut skyboxes: ResMut<Assets<Image>>,
+    skybox_assets: Res<SkyBoxAssets>,
     mut state: ResMut<NextState<AppState>>,
     fpopeq: Query<Entity, With<FloatingOriginPlaceholderComponent>>,
 ) {
@@ -122,40 +128,65 @@ fn wait_for_asset_loading(
     let nav_ball_scene_option = scenes.get(&scene_assets.nav_ball_scene);
     let nav_ball_orbital_scene_option = scenes.get(&scene_assets.nav_ball_orbital_scene);
     let inverted_xyz_scene_option = scenes.get(&scene_assets.inverted_xyz_ball_scene);
+    let jupiter_scene_option = scenes.get(&scene_assets.jupiter_scene);
     let nav_ring_mesh_option = meshes.get(&mesh_assets.nav_ball_mesh);
     let nav_ball_mesh_option = meshes.get(&mesh_assets.nav_ball_mesh);
     let nav_ball_orbital_mesh_option = meshes.get(&mesh_assets.nav_ball_orbital_mesh);
     let inverted_xyz_mesh_option = meshes.get(&mesh_assets.inverted_xyz_ball_mesh);
-    let mut scenes_loaded = false;
+    let jupiter_mesh_option = meshes.get(&mesh_assets.jupiter_mesh);
+    let milky_way_skybox_option = skyboxes.get(&skybox_assets.milky_way_skybox);
+    let mut all_assets_loaded = false;
     match (
         nav_ring_scene_option,
         nav_ball_scene_option,
         nav_ball_orbital_scene_option,
         inverted_xyz_scene_option,
-    ) {
-        (Some(_), Some(_), Some(_), Some(_)) => {
-            debug!("scenes loaded");
-            scenes_loaded = true;
-        }
-        _ => {}
-    }
-    let mut meshes_loaded = false;
-    match (
+        jupiter_scene_option,
         nav_ring_mesh_option,
         nav_ball_mesh_option,
         nav_ball_orbital_mesh_option,
         inverted_xyz_mesh_option,
+        jupiter_mesh_option,
+        milky_way_skybox_option,
     ) {
-        (Some(_), Some(_), Some(_), Some(_)) => {
-            debug!("meshes loaded");
-            meshes_loaded = true;
+        (
+            Some(_),
+            Some(_),
+            Some(_),
+            Some(_),
+            Some(_),
+            Some(_),
+            Some(_),
+            Some(_),
+            Some(_),
+            Some(_),
+            Some(_),
+        ) => {
+            debug!("all assets loaded");
+            all_assets_loaded = true;
         }
         _ => {}
     }
-    if scenes_loaded && meshes_loaded {
+    if all_assets_loaded {
         debug!("loading complete");
         state.set(AppState::PreRunning);
     }
+
+    // let mut skybox_ready = false;
+    // while !skybox_ready {
+    match skyboxes.get_mut(skybox_assets.milky_way_skybox.id()) {
+        Some(image) => {
+            image.reinterpret_stacked_2d_as_array(image.height() / image.width());
+            image.texture_view_descriptor = Some(TextureViewDescriptor {
+                dimension: Some(TextureViewDimension::Cube),
+                ..default()
+            });
+            // skybox_ready = true;
+        }
+        None => {}
+    }
+    // }
+
     for each in fpopeq.iter() {
         debug!("{:?}", each);
     }
@@ -168,6 +199,7 @@ pub struct MeshAssets {
     pub nav_ball_mesh: Handle<Mesh>,
     pub nav_ball_orbital_mesh: Handle<Mesh>,
     pub inverted_xyz_ball_mesh: Handle<Mesh>,
+    pub jupiter_mesh: Handle<Mesh>,
 }
 
 #[derive(Resource, Debug, Default)]
@@ -176,6 +208,12 @@ pub struct SceneAssets {
     pub nav_ball_scene: Handle<Scene>,
     pub nav_ball_orbital_scene: Handle<Scene>,
     pub inverted_xyz_ball_scene: Handle<Scene>,
+    pub jupiter_scene: Handle<Scene>,
+}
+
+#[derive(Resource, Debug, Default)]
+pub struct SkyBoxAssets {
+    pub milky_way_skybox: Handle<Image>,
 }
 
 #[derive(Resource, Debug)]
@@ -183,8 +221,35 @@ pub struct TargetResource {
     target: Option<Entity>,
 }
 
+#[derive(Debug)]
+enum CurrentCommand {
+    NavTargetModeSelect,
+}
+
+#[derive(Component, Deref, DerefMut, Debug)]
+struct CommandEntryTimer(Timer);
+
+#[derive(Resource, Debug)]
+pub struct CommandEntryResource {
+    current_command_entry: Option<CurrentCommand>,
+}
+
+#[derive(Debug)]
+enum NavTargetMode {
+    Nearest,
+    Cursor,
+}
+
+#[derive(Resource, Debug)]
+pub struct OpsModeResource {
+    current_nav_mode: NavTargetMode,
+}
+
 #[derive(Component)]
 pub struct Planet;
+
+#[derive(Component)]
+pub struct ValidTarget;
 
 #[derive(Component)]
 pub struct HUD;
@@ -200,6 +265,12 @@ pub struct TargetObjectCrosshair;
 
 #[derive(Component)]
 pub struct NearestObjectCrosshair;
+
+#[derive(Component)]
+pub struct CameraCursorCrosshair;
+
+#[derive(Component)]
+pub struct CursorTargetCrosshair;
 
 fn main_camera_setup(mut commands: Commands, space: Res<RootReferenceFrame<i64>>) {
     let span = span!(Level::INFO, "main_camera_setup()");
@@ -244,12 +315,17 @@ fn initiate_asset_loading(mut commands: Commands, asset_server: Res<AssetServer>
             .load("experiment_002/nav_ball_orbital.glb#Mesh0/Primitive0"),
         inverted_xyz_ball_mesh: asset_server
             .load("experiment_002/inverted_xyz_ball.glb#Mesh0/Primitive0"),
+        jupiter_mesh: asset_server.load("experiment_002/jupiter.glb#Mesh0/Primitive0"),
     });
     commands.insert_resource(SceneAssets {
         nav_ring_scene: asset_server.load("experiment_002/nav_ring.glb#Scene0"),
         nav_ball_scene: asset_server.load("experiment_002/nav_ball.glb#Scene0"),
         nav_ball_orbital_scene: asset_server.load("experiment_002/nav_ball_orbital.glb#Scene0"),
         inverted_xyz_ball_scene: asset_server.load("experiment_002/inverted_xyz_ball.glb#Scene0"),
+        jupiter_scene: asset_server.load("experiment_002/jupiter.glb#Scene0"),
+    });
+    commands.insert_resource(SkyBoxAssets {
+        milky_way_skybox: asset_server.load("experiment_002/milky_way.png"),
     });
     debug!("stop");
 }
@@ -263,6 +339,7 @@ fn general_setup(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut cam: ResMut<CameraInput>,
     scene_assets: Res<SceneAssets>,
+    skybox_assets: Res<SkyBoxAssets>,
     mut state: ResMut<NextState<AppState>>,
     mut perspective_hud_query: Query<Entity, (With<Camera3d>, With<CameraController>)>,
 ) {
@@ -275,33 +352,33 @@ fn general_setup(
     window.cursor.visible = true;
     cam.defaults_disabled = true;
 
-    for each_perspective_hud_entity in perspective_hud_query.iter_mut() {
-        commands
-            .entity(each_perspective_hud_entity)
-            .with_children(|parent| {
-                /* Perspective NavBall */
-                parent.spawn((
-                    BACKGROUND,
-                    HookedSceneBundle {
-                        hook: SceneHook::new(|entity, cmds| {
-                            match entity.get::<Name>().map(|t| t.as_str()) {
-                                _ => cmds.insert(BACKGROUND),
-                            };
-                        }),
-                        scene: SceneBundle {
-                            scene: scene_assets.nav_ball_orbital_scene.clone(),
-                            transform: Transform::IDENTITY
-                                .with_translation(Transform::IDENTITY.forward() * 18.0)
-                                * Transform::IDENTITY
-                                    .with_translation(Transform::IDENTITY.down() * 6.0),
+    // for each_perspective_hud_entity in perspective_hud_query.iter_mut() {
+    //     commands
+    //         .entity(each_perspective_hud_entity)
+    //         .with_children(|parent| {
+    //             /* Perspective NavBall */
+    //             parent.spawn((
+    //                 BACKGROUND,
+    //                 HookedSceneBundle {
+    //                     hook: SceneHook::new(|entity, cmds| {
+    //                         match entity.get::<Name>().map(|t| t.as_str()) {
+    //                             _ => cmds.insert(BACKGROUND),
+    //                         };
+    //                     }),
+    //                     scene: SceneBundle {
+    //                         scene: scene_assets.nav_ball_orbital_scene.clone(),
+    //                         transform: Transform::IDENTITY
+    //                             .with_translation(Transform::IDENTITY.forward() * 18.0)
+    //                             * Transform::IDENTITY
+    //                                 .with_translation(Transform::IDENTITY.down() * 6.0),
 
-                            ..default()
-                        },
-                    },
-                    HUD,
-                ));
-            });
-    }
+    //                         ..default()
+    //                     },
+    //                 },
+    //                 HUD,
+    //             ));
+    //         });
+    // }
 
     /* Overlay Camera */
     commands.spawn((
@@ -325,79 +402,167 @@ fn general_setup(
         Ok(c) => c,
         Err(_) => Color::rgb(1.0, 1.0, 1.0),
     };
-    commands.spawn((
-        OVERLAY,
-        MaterialMesh2dBundle {
-            mesh: small_triangle.clone(),
-            material: color_materials.add(camera_reticle_color),
-            transform: Transform {
-                translation: Vec3 {
-                    x: 10.0,
-                    y: 10.0,
-                    z: 0.0,
+
+    commands
+        .spawn((
+            OVERLAY,
+            CameraCursorCrosshair,
+            Transform::default(),
+            GlobalTransform::default(),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: small_triangle.clone(),
+                    material: color_materials.add(camera_reticle_color),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 10.0,
+                            y: 10.0,
+                            z: 0.0,
+                        },
+                        ..default()
+                    },
+                    ..default()
                 },
-                ..default()
-            },
-            ..default()
-        },
-    ));
-    commands.spawn((
-        OVERLAY,
-        MaterialMesh2dBundle {
-            mesh: small_triangle.clone(),
-            material: color_materials.add(camera_reticle_color),
-            transform: Transform {
-                translation: Vec3 {
-                    x: -10.0,
-                    y: 10.0,
-                    z: 0.0,
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: small_triangle.clone(),
+                    material: color_materials.add(camera_reticle_color),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -10.0,
+                            y: 10.0,
+                            z: 0.0,
+                        },
+                        rotation: Quat::from_rotation_z(PI / 2.0),
+                        ..default()
+                    },
+                    ..default()
                 },
-                rotation: Quat::from_rotation_z(PI / 2.0),
-                ..default()
-            },
-            ..default()
-        },
-    ));
-    commands.spawn((
-        OVERLAY,
-        MaterialMesh2dBundle {
-            mesh: small_triangle.clone(),
-            material: color_materials.add(camera_reticle_color),
-            transform: Transform {
-                translation: Vec3 {
-                    x: -10.0,
-                    y: -10.0,
-                    z: 0.0,
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: small_triangle.clone(),
+                    material: color_materials.add(camera_reticle_color),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -10.0,
+                            y: -10.0,
+                            z: 0.0,
+                        },
+                        rotation: Quat::from_rotation_z(PI),
+                        ..default()
+                    },
+                    ..default()
                 },
-                rotation: Quat::from_rotation_z(PI),
-                ..default()
-            },
-            ..default()
-        },
-    ));
-    commands.spawn((
-        OVERLAY,
-        MaterialMesh2dBundle {
-            mesh: small_triangle.clone(),
-            material: color_materials.add(camera_reticle_color),
-            transform: Transform {
-                translation: Vec3 {
-                    x: 10.0,
-                    y: -10.0,
-                    z: 0.0,
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: small_triangle.clone(),
+                    material: color_materials.add(camera_reticle_color),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 10.0,
+                            y: -10.0,
+                            z: 0.0,
+                        },
+                        rotation: Quat::from_rotation_z(-PI / 2.0),
+                        ..default()
+                    },
+                    ..default()
                 },
-                rotation: Quat::from_rotation_z(-PI / 2.0),
-                ..default()
-            },
-            ..default()
-        },
-    ));
+            ));
+        });
+
+    commands
+        .spawn((
+            OVERLAY,
+            CursorTargetCrosshair,
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::Hidden,
+            InheritedVisibility::HIDDEN,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: small_triangle.clone(),
+                    material: color_materials.add(camera_reticle_color),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 0.0,
+                            y: 10.0,
+                            z: 0.0,
+                        },
+                        rotation: Quat::from_rotation_z(PI / 4.0),
+                        ..default()
+                    },
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: small_triangle.clone(),
+                    material: color_materials.add(camera_reticle_color),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: -10.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        rotation: Quat::from_rotation_z((PI / 4.0) + (PI / 2.0)),
+                        ..default()
+                    },
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: small_triangle.clone(),
+                    material: color_materials.add(camera_reticle_color),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 0.0,
+                            y: -10.0,
+                            z: 0.0,
+                        },
+                        rotation: Quat::from_rotation_z((PI / 4.0) + PI),
+                        ..default()
+                    },
+                    ..default()
+                },
+            ));
+            parent.spawn((
+                OVERLAY,
+                MaterialMesh2dBundle {
+                    mesh: small_triangle.clone(),
+                    material: color_materials.add(camera_reticle_color),
+                    transform: Transform {
+                        translation: Vec3 {
+                            x: 10.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        rotation: Quat::from_rotation_z(-(PI / 4.0)),
+                        ..default()
+                    },
+                    ..default()
+                },
+            ));
+        });
 
     /* Crosshair */
     let short_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(10.0, 1.0)));
     let short_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 10.0)));
-    // let long_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(2000.0, 1.0)));
-    // let long_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 2000.0)));
     let crosshair_color = match Color::hex("FE9F00") {
         Ok(c) => c,
         Err(_) => Color::rgb(1.0, 1.0, 1.0),
@@ -544,15 +709,8 @@ fn general_setup(
         });
 
     /* Crosshair */
-    // let short_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(10.0, 1.0)));
-    // let short_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 10.0)));
     let long_horizontal = Mesh2dHandle(meshes.add(Rectangle::new(2000.0, 1.0)));
     let long_vertical = Mesh2dHandle(meshes.add(Rectangle::new(1.0, 2000.0)));
-    // let crosshair_color = match Color::hex("FE9F00") {
-    //     Ok(c) => c,
-    //     Err(_) => Color::rgb(1.0, 1.0, 1.0),
-    // };
-    /* Crosshair */
     commands
         .spawn((
             OVERLAY,
@@ -632,6 +790,16 @@ fn general_setup(
         });
 
     commands.insert_resource(TargetResource { target: None });
+
+    commands.insert_resource(CommandEntryResource {
+        current_command_entry: None,
+    });
+
+    commands.spawn(CommandEntryTimer(Timer::default()));
+
+    commands.insert_resource(OpsModeResource {
+        current_nav_mode: NavTargetMode::Cursor,
+    });
 
     let hud_cam_transform = Transform::from_xyz(-7.5, 3.75, 3.0);
     debug!("hud_cam_transform: {:?}", hud_cam_transform);
@@ -730,13 +898,12 @@ fn general_setup(
         },
     ));
 
-    let mesh_handle = meshes.add(Sphere::new(100.0).mesh().ico(32).unwrap());
-    let matl_handle = materials.add(StandardMaterial {
-        base_color: Color::ORANGE_RED,
-        perceptual_roughness: 0.8,
-        reflectance: 1.0,
-        ..default()
+    let perspective_hud_entity = perspective_hud_query.single_mut();
+    commands.entity(perspective_hud_entity).insert(Skybox {
+        image: skybox_assets.milky_way_skybox.clone(),
+        brightness: 1000.0,
     });
+
     let (planet_cell, planet_pos): (GridCell<i64>, _) =
         space.imprecise_translation_to_grid(Vec3::ZERO);
     let planet_transform = Transform::from_translation(planet_pos);
@@ -745,14 +912,27 @@ fn general_setup(
     commands.spawn((
         BACKGROUND,
         Planet,
+        ValidTarget,
         RigidBody::Fixed,
         GravityScale(0.0),
         Collider::ball(100.0),
-        PbrBundle {
-            mesh: mesh_handle.clone(),
-            material: matl_handle.clone(),
-            transform: planet_transform,
-            ..default()
+        // PbrBundle {
+        //     mesh: mesh_handle.clone(),
+        //     material: matl_handle.clone(),
+        //     transform: planet_transform,
+        //     ..default()
+        // },
+        HookedSceneBundle {
+            hook: SceneHook::new(|entity, cmds| {
+                match entity.get::<Name>().map(|t| t.as_str()) {
+                    _ => cmds.insert(BACKGROUND),
+                };
+            }),
+            scene: SceneBundle {
+                scene: scene_assets.jupiter_scene.clone(),
+                transform: planet_transform,
+                ..default()
+            },
         },
         planet_cell,
     ));
@@ -773,6 +953,7 @@ fn general_setup(
     /* CubeSat (moving) */
     commands.spawn((
         BACKGROUND,
+        ValidTarget,
         RigidBody::Dynamic,
         Collider::cuboid(0.5, 0.5, 0.5),
         GravityScale(0.0),
@@ -805,6 +986,7 @@ fn general_setup(
     /* CubeSat (stationary; spinning) */
     commands.spawn((
         BACKGROUND,
+        ValidTarget,
         RigidBody::KinematicVelocityBased,
         Collider::cuboid(0.5, 0.5, 0.5),
         GravityScale(0.0),
@@ -943,13 +1125,14 @@ fn update_hud_reticles(
     >,
     cameras: Query<&CameraController>,
     objects: Query<&GlobalTransform, Without<NearestObjectCrosshair>>,
-    mut gizmos: Gizmos,
+    valid_targets_query: Query<(&GlobalTransform, Entity), With<ValidTarget>>,
     mut target_display_query: Query<&mut Text, With<TargetDisplay>>,
     mut nearest_object_crosshair_transform_query: Query<
         &mut Transform,
         (
             With<NearestObjectCrosshair>,
             Without<TargetObjectCrosshair>,
+            Without<CursorTargetCrosshair>,
             Without<Camera3d>,
             Without<Camera2d>,
         ),
@@ -959,17 +1142,44 @@ fn update_hud_reticles(
         (
             With<TargetObjectCrosshair>,
             Without<NearestObjectCrosshair>,
+            Without<CursorTargetCrosshair>,
+            Without<Camera3d>,
+            Without<Camera2d>,
+        ),
+    >,
+    mut cursor_target_crosshair_transform_query: Query<
+        &mut Transform,
+        (
+            With<CursorTargetCrosshair>,
+            Without<TargetObjectCrosshair>,
+            Without<NearestObjectCrosshair>,
             Without<Camera3d>,
             Without<Camera2d>,
         ),
     >,
     mut nearest_object_crosshair_visibility_query: Query<
         &mut Visibility,
-        (With<NearestObjectCrosshair>, Without<TargetObjectCrosshair>),
+        (
+            With<NearestObjectCrosshair>,
+            Without<TargetObjectCrosshair>,
+            Without<CursorTargetCrosshair>,
+        ),
     >,
     mut target_object_crosshair_visibility_query: Query<
         &mut Visibility,
-        (With<TargetObjectCrosshair>, Without<NearestObjectCrosshair>),
+        (
+            With<TargetObjectCrosshair>,
+            Without<NearestObjectCrosshair>,
+            Without<CursorTargetCrosshair>,
+        ),
+    >,
+    mut cursor_target_crosshair_visibility_query: Query<
+        &mut Visibility,
+        (
+            With<CursorTargetCrosshair>,
+            Without<TargetObjectCrosshair>,
+            Without<NearestObjectCrosshair>,
+        ),
     >,
     camera_2d_query: Query<
         (&mut Camera, &mut Transform, &GlobalTransform),
@@ -977,10 +1187,10 @@ fn update_hud_reticles(
     >,
     key: Res<ButtonInput<KeyCode>>,
     mut target_resource: ResMut<TargetResource>,
+    ops_mode_resource: Res<OpsModeResource>,
 ) {
     let span = span!(Level::INFO, "update_hud_reticles()");
     let _enter = span.enter();
-    // debug!("start");
 
     let (camera_3d, _camera_3d_transform, camera_3d_global_transform) = camera_3d_query.single();
 
@@ -990,6 +1200,50 @@ fn update_hud_reticles(
         debug!("camera_2d.logical_viewport_rect() returned none");
         return;
     };
+
+    let mut cursor_target_crosshair_transform =
+        cursor_target_crosshair_transform_query.single_mut();
+
+    let mut cursor_target_crosshair_visibility =
+        cursor_target_crosshair_visibility_query.single_mut();
+
+    let mut cursor_target_onscreen = false;
+    let mut cursor_nearest_entity = None;
+    let mut cursor_nearest = Vec2 {
+        x: 10000000.0,
+        y: 10000000.0,
+    };
+    for (index, (each_valid_target_transform, each_valid_target_entity)) in
+        valid_targets_query.iter().enumerate()
+    {
+        trace!("{:?}: {:?}", index, each_valid_target_transform);
+        match camera_3d.world_to_viewport(
+            camera_3d_global_transform,
+            each_valid_target_transform.translation(),
+        ) {
+            Some(each_object_3d_viewport_position) => {
+                match camera_2d.viewport_to_world_2d(
+                    camera_2d_global_transform,
+                    each_object_3d_viewport_position,
+                ) {
+                    Some(each_object_2d_viewport_position) => {
+                        if each_object_2d_viewport_position.length() < cursor_nearest.length() {
+                            cursor_target_onscreen = true;
+                            cursor_nearest = each_object_2d_viewport_position;
+                            cursor_nearest_entity = Some(each_valid_target_entity);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            None => {}
+        }
+    }
+    if cursor_target_onscreen {
+        *cursor_target_crosshair_visibility = Visibility::Visible;
+        cursor_target_crosshair_transform.translation.x = cursor_nearest.x;
+        cursor_target_crosshair_transform.translation.y = cursor_nearest.y;
+    }
 
     let mut target_object_crosshair_transform =
         target_object_crosshair_transform_query.single_mut();
@@ -1049,15 +1303,7 @@ fn update_hud_reticles(
         debug!("objects.get(entity) did not return ok");
         return;
     };
-    let (scale, rotation, translation) = transform.to_scale_rotation_translation();
-    gizmos
-        .sphere(translation, rotation, scale.x * 1.0, Color::RED)
-        .circle_segments(128);
-
-    if key.just_pressed(KeyCode::Enter) {
-        target_resource.target = Some(entity);
-        debug!("{:?}", target_resource);
-    }
+    let (_scale, _rotationn, translation) = transform.to_scale_rotation_translation();
 
     let mut nearest_object_crosshair_transform =
         nearest_object_crosshair_transform_query.single_mut();
@@ -1130,7 +1376,17 @@ fn update_hud_reticles(
         }
     };
 
-    // debug!("stop");
+    if key.just_pressed(KeyCode::Enter) {
+        match ops_mode_resource.current_nav_mode {
+            NavTargetMode::Nearest => {
+                target_resource.target = Some(entity);
+            }
+            NavTargetMode::Cursor => {
+                target_resource.target = cursor_nearest_entity;
+            }
+        }
+        debug!("{:?}", target_resource);
+    }
 }
 
 fn spawn_pellet(
@@ -1141,8 +1397,8 @@ fn spawn_pellet(
     floating_origin_grid_transform_query: Query<GridTransform<i64>, With<FloatingOrigin>>,
     camera_controller_query: Query<&CameraController>,
 ) {
-    let capsule = Capsule3d::new(0.1, 0.2);
-    let mesh_handle = meshes.add(capsule);
+    let torus = Torus::new(0.01, 0.03);
+    let mesh_handle = meshes.add(torus);
     let matl_handle = materials.add(StandardMaterial {
         base_color: Color::PURPLE,
         perceptual_roughness: 0.8,
@@ -1154,13 +1410,13 @@ fn spawn_pellet(
     let camera_controller = camera_controller_query.single();
     let spawn_transform = Transform {
         translation: floating_origin_grid_transform.transform.translation
-            + (floating_origin_grid_transform.transform.forward() * 2.0),
+            + (floating_origin_grid_transform.transform.forward() * 0.125),
         rotation: floating_origin_grid_transform.transform.rotation,
         ..default()
     };
     let spawn_velocity = Velocity {
         linvel: camera_controller.velocity().0.as_vec3()
-            + (floating_origin_grid_transform.transform.forward() * 10.0),
+            + (floating_origin_grid_transform.transform.forward() * 20.0),
         angvel: Vec3 {
             x: 2.1,
             y: 2.2,
@@ -1173,6 +1429,7 @@ fn spawn_pellet(
         /* Pellet */
         commands.spawn((
             BACKGROUND,
+            ValidTarget,
             *floating_origin_grid_transform.cell,
             RigidBody::Dynamic,
             Collider::capsule(
@@ -1207,7 +1464,13 @@ fn miscellaneous_input_handling(
     key: Res<ButtonInput<KeyCode>>,
     mut exit: EventWriter<AppExit>,
     mut rapier_configuration: ResMut<RapierConfiguration>,
+    mut nav_command_resource: ResMut<CommandEntryResource>,
+    mut ops_mode_resource: ResMut<OpsModeResource>,
+    mut command_entry_timer_query: Query<&mut CommandEntryTimer>,
 ) {
+    let span = span!(Level::INFO, "miscellaneous_input_handling()");
+    let _enter = span.enter();
+
     let Some(mut window) = windows.get_single_mut().ok() else {
         return;
     };
@@ -1293,31 +1556,92 @@ fn miscellaneous_input_handling(
             _ => {}
         };
     }
+
+    match (
+        &nav_command_resource.current_command_entry,
+        command_entry_timer_query.single_mut(),
+    ) {
+        (Some(CurrentCommand::NavTargetModeSelect), mut timer) => {
+            if !timer.finished() {
+                if key.just_pressed(KeyCode::KeyC) {
+                    ops_mode_resource.current_nav_mode = NavTargetMode::Cursor;
+                    debug!("{:?} {:?}", ops_mode_resource.current_nav_mode, timer);
+                }
+                if key.just_pressed(KeyCode::KeyN) {
+                    ops_mode_resource.current_nav_mode = NavTargetMode::Nearest;
+                    debug!("{:?} {:?}", ops_mode_resource.current_nav_mode, timer);
+                }
+            } else {
+                trace!("command entry timer finished");
+                if key.just_pressed(KeyCode::KeyT) {
+                    nav_command_resource.current_command_entry =
+                        Some(CurrentCommand::NavTargetModeSelect);
+                    timer.set_duration(Duration::from_secs(2));
+                    timer.reset();
+                }
+            }
+        }
+        (None, mut timer) => {
+            if key.just_pressed(KeyCode::KeyT) {
+                nav_command_resource.current_command_entry =
+                    Some(CurrentCommand::NavTargetModeSelect);
+                timer.set_duration(Duration::from_secs(2));
+                timer.reset();
+            }
+        }
+    }
+}
+
+fn tick_timers(mut command_entry_timer_query: Query<&mut CommandEntryTimer>, time: Res<Time>) {
+    command_entry_timer_query.single_mut().tick(time.delta());
 }
 
 fn update_hud(
     mut hud_transform_query: Query<&mut Transform, (With<HUD>, Without<Planet>)>,
     camera_grid_query: Query<GridTransformReadOnly<i64>, (With<FloatingOrigin>, Without<HUD>)>,
-    planet_transform_query: Query<&Transform, With<Planet>>,
+    planet_transform_entity_query: Query<(&Transform, Entity), With<Planet>>,
+    target_resource: Res<TargetResource>,
+    objects: Query<&GlobalTransform>,
 ) {
     let span = span!(Level::INFO, "update_hud()");
     let _enter = span.enter();
-    let camera_grid = camera_grid_query.single();
-    let mut camera_rotation = camera_grid.transform.rotation;
-    let planet_transform = planet_transform_query.single();
-    let mut camera_looking_at_planet_rotation = camera_grid
-        .transform
-        .looking_at(
-            planet_transform.translation,
-            planet_transform.up().normalize(),
-        )
-        .rotation
-        .inverse();
-    camera_rotation.z = -camera_rotation.z;
-    camera_looking_at_planet_rotation.z = -camera_looking_at_planet_rotation.z;
-    let camera_rotations_combined = camera_rotation * camera_looking_at_planet_rotation;
-    for mut each_hud_transform in hud_transform_query.iter_mut() {
-        let final_rotation = camera_rotations_combined;
-        each_hud_transform.rotation = final_rotation;
+
+    match target_resource.target {
+        Some(target_entity) => {
+            /* Alight NavBall to Planet */
+            let camera_grid = camera_grid_query.single();
+            let mut camera_rotation = camera_grid.transform.rotation;
+            let (_planet_transform, planet_entity) = planet_transform_entity_query.single();
+            match objects.get(target_entity) {
+                Ok(target_transform) => {
+                    let (_target_object_scale, _target_object_rotation, target_object_translation) =
+                        target_transform.to_scale_rotation_translation();
+
+                    let mut camera_looking_at_target_rotation = camera_grid
+                        .transform
+                        .looking_at(target_object_translation, {
+                            if target_entity == planet_entity {
+                                target_transform.up().normalize()
+                            } else {
+                                camera_grid.transform.up().normalize()
+                            }
+                        })
+                        .rotation
+                        .inverse();
+                    camera_rotation.z = -camera_rotation.z;
+                    camera_looking_at_target_rotation.z = -camera_looking_at_target_rotation.z;
+                    let camera_rotations_combined =
+                        camera_rotation * camera_looking_at_target_rotation;
+                    for mut each_hud_transform in hud_transform_query.iter_mut() {
+                        let final_rotation = camera_rotations_combined;
+                        each_hud_transform.rotation = final_rotation;
+                    }
+                }
+                Err(e) => {
+                    error!("{:?}", e)
+                }
+            }
+        }
+        None => {}
     }
 }
