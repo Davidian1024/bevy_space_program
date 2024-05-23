@@ -2,7 +2,7 @@ use std::{f32::consts::PI, time::Duration};
 
 use bevy::{
     app::AppExit,
-    core_pipeline::{core_3d::Camera3dDepthLoadOp, Skybox},
+    core_pipeline::Skybox,
     log::Level,
     prelude::*,
     render::{
@@ -813,10 +813,10 @@ fn general_setup(
                 scaling_mode: ScalingMode::FixedVertical(10.0),
                 ..default()
             }),
-            camera_3d: Camera3d {
-                depth_load_op: Camera3dDepthLoadOp::Load,
-                ..default()
-            },
+            // camera_3d: Camera3d {
+            //     depth_load_op: Camera3dDepthLoadOp::Load,
+            //     ..default()
+            // },
             camera: Camera {
                 order: 1,
                 ..default()

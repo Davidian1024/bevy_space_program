@@ -27,3 +27,6 @@ name = "experiment_001"
 
 [[bin]]
 name = "experiment_002"
+
+[[bin]]
+name = "experiment_003"
