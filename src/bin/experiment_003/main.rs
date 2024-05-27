@@ -3,14 +3,13 @@ use std::f32::consts::PI;
 use bevy::{
     app::AppExit,
     core_pipeline::bloom::BloomSettings,
-    ecs::system::{Command, CommandQueue, EntityCommand},
-    log::tracing_subscriber::field::debug,
     math::DVec3,
     prelude::*,
     render::{camera::Exposure, view::RenderLayers},
     sprite::{MaterialMesh2dBundle, Mesh2dHandle},
     window::{CursorGrabMode, PresentMode, PrimaryWindow, WindowMode},
 };
+use bevy_space_program::crosshair::{spawn_crosshair, CrosshairType};
 use big_space::{
     camera::{CameraController, CameraInput},
     reference_frame::RootReferenceFrame,
@@ -24,9 +23,12 @@ enum AutomationState {
     FocusingOnTarget,
 }
 
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct OverlayGizmos {}
+
 fn main() {
     App::new()
-        .insert_state(AutomationState::Idle)
+        .insert_state(AutomationState::FocusingOnTarget)
         .add_plugins((
             DefaultPlugins.build().disable::<TransformPlugin>(),
             big_space::FloatingOriginPlugin::<i64>::default(),
@@ -34,6 +36,7 @@ fn main() {
             big_space::camera::CameraControllerPlugin::<i64>::default(),
             bevy_framepace::FramepacePlugin,
         ))
+        .init_gizmo_group::<OverlayGizmos>()
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(Msaa::Sample8)
         .insert_resource(AmbientLight {
@@ -49,7 +52,10 @@ fn main() {
             Update,
             focus_on_target.run_if(in_state(AutomationState::FocusingOnTarget)),
         )
-        // .add_systems(Update, (input_handling))
+        .add_systems(
+            PostUpdate,
+            (update_valid_target_gizmos, update_orbit_gizmos),
+        )
         .run()
 }
 
@@ -58,6 +64,12 @@ const OVERLAY: RenderLayers = RenderLayers::layer(2);
 
 #[derive(Component)]
 pub struct ValidTarget;
+
+#[derive(Component)]
+pub struct Orbit {
+    radius: f32,
+    base_color: Color,
+}
 
 #[derive(Component)]
 pub struct CursorNearestReticle;
@@ -105,6 +117,11 @@ fn setup(
     /* Ensure gizmos will be rendered to the background layer */
     let (default_gizmo_config, _) = gizmo_config_store.config_mut::<DefaultGizmoConfigGroup>();
     default_gizmo_config.render_layers = BACKGROUND;
+    default_gizmo_config.line_width = 2.0;
+
+    let (overlay_gizmo_config, _) = gizmo_config_store.config_mut::<OverlayGizmos>();
+    overlay_gizmo_config.render_layers = OVERLAY;
+    overlay_gizmo_config.line_width = 0.25;
 
     /* Overlay Camera */
     commands.spawn((
@@ -120,6 +137,14 @@ fn setup(
             ..default()
         },
     ));
+
+    spawn_crosshair(
+        &mut commands,
+        CrosshairType::SmallTriangleArrows45s,
+        &mut meshes,
+        &mut color_materials,
+        OVERLAY,
+    );
 
     /* CursorNearestReticle */
     let small_triangle = Mesh2dHandle(meshes.add(Triangle2d::new(
@@ -234,8 +259,6 @@ fn setup(
             parent.spawn((
                 OVERLAY,
                 MaterialMesh2dBundle {
-                    // visibility: Visibility::Inherited,
-                    // inherited_visibility: InheritedVisibility::HIDDEN,
                     mesh: long_horizontal.clone(),
                     transform: Transform {
                         translation: Vec3 {
@@ -309,6 +332,7 @@ fn setup(
     });
     let sun_radius_m = 695_508_000.0;
     let sun_mesh = meshes.add(Sphere::new(sun_radius_m).mesh().ico(16).unwrap());
+
     commands
         .spawn((
             BACKGROUND,
@@ -325,23 +349,19 @@ fn setup(
             },
         ))
         .with_children(|builder| {
-            builder
-                .spawn((
-                    BACKGROUND,
-                    ComponentInfo {
-                        name: "Sun".to_string(),
-                        size: sun_radius_m,
-                    },
-                    ValidTarget,
-                    PbrBundle {
-                        mesh: sun_mesh,
-                        material: sun_mat,
-                        ..default()
-                    },
-                ))
-                .add(SpawnCrosshair {
-                    crosshair_type: CrosshairType::SmallSquareCorners,
-                });
+            builder.spawn((
+                BACKGROUND,
+                ComponentInfo {
+                    name: "Sun".to_string(),
+                    size: sun_radius_m,
+                },
+                ValidTarget,
+                PbrBundle {
+                    mesh: sun_mesh,
+                    material: sun_mat,
+                    ..default()
+                },
+            ));
         });
 
     let mercury_mat = materials.add(StandardMaterial {
@@ -355,25 +375,32 @@ fn setup(
     let mercury_mesh = meshes.add(Sphere::new(mercury_radius_m).mesh().ico(16).unwrap());
     let (mercury_cell, mercury_pos): (GridCell<i64>, _) =
         space.imprecise_translation_to_grid(Vec3::Z * mercury_orbit_radius_m);
-    // initial_target_entity = Some(
-    commands
-                .spawn((
-                    ComponentInfo { name: "Mercury".to_string(), size: mercury_radius_m },
-                    BACKGROUND,
-                    ValidTarget,
-                    PbrBundle {
-                        mesh: mercury_mesh,
-                        material: mercury_mat,
-                        transform: Transform::from_translation(mercury_pos),
-                        ..default()
-                    },
-                    mercury_cell,
-                    // ReferenceFrame::<i64>::default(),
-                    // Rotates(0.001),
-                ))
-                // .id()
-        // )
-        ;
+    commands.spawn((
+        ComponentInfo {
+            name: "Mercury".to_string(),
+            size: mercury_radius_m,
+        },
+        BACKGROUND,
+        ValidTarget,
+        PbrBundle {
+            mesh: mercury_mesh,
+            material: mercury_mat,
+            transform: Transform::from_translation(mercury_pos),
+            ..default()
+        },
+        mercury_cell,
+    ));
+
+    commands.spawn((
+        BACKGROUND,
+        Orbit {
+            radius: mercury_orbit_radius_m,
+            base_color: Color::DARK_GRAY,
+        },
+        Transform::IDENTITY,
+        GlobalTransform::IDENTITY,
+        GridCell::<i64>::ZERO,
+    ));
 
     let venus_mat = materials.add(StandardMaterial {
         base_color: Color::ORANGE,
@@ -386,25 +413,31 @@ fn setup(
     let venus_mesh = meshes.add(Sphere::new(venus_radius_m).mesh().ico(16).unwrap());
     let (venus_cell, venus_pos): (GridCell<i64>, _) =
         space.imprecise_translation_to_grid(Vec3::Z * venus_orbit_radius_m);
-    // initial_target_entity = Some(
-    commands
-                .spawn((
-                    ComponentInfo { name: "Venus".to_string(), size: venus_radius_m },
-                    BACKGROUND,
-                    ValidTarget,
-                    PbrBundle {
-                        mesh: venus_mesh,
-                        material: venus_mat,
-                        transform: Transform::from_translation(venus_pos),
-                        ..default()
-                    },
-                    venus_cell,
-                    // ReferenceFrame::<i64>::default(),
-                    // Rotates(0.001),
-                ))
-                // .id()
-        // )
-        ;
+    commands.spawn((
+        ComponentInfo {
+            name: "Venus".to_string(),
+            size: venus_radius_m,
+        },
+        BACKGROUND,
+        ValidTarget,
+        PbrBundle {
+            mesh: venus_mesh,
+            material: venus_mat,
+            transform: Transform::from_translation(venus_pos),
+            ..default()
+        },
+        venus_cell,
+    ));
+    commands.spawn((
+        BACKGROUND,
+        Orbit {
+            radius: venus_orbit_radius_m,
+            base_color: Color::ORANGE,
+        },
+        Transform::IDENTITY,
+        GlobalTransform::IDENTITY,
+        GridCell::<i64>::ZERO,
+    ));
 
     let earth_mat = materials.add(StandardMaterial {
         base_color: Color::BLUE,
@@ -417,25 +450,31 @@ fn setup(
     let earth_mesh = meshes.add(Sphere::new(earth_radius_m).mesh().ico(16).unwrap());
     let (earth_cell, earth_pos): (GridCell<i64>, _) =
         space.imprecise_translation_to_grid(Vec3::Z * earth_orbit_radius_m);
-    // initial_target_entity = Some(
-    commands
-            .spawn((
-                ComponentInfo { name: "Earth".to_string(), size: earth_radius_m },
-                BACKGROUND,
-                ValidTarget,
-                PbrBundle {
-                    mesh: earth_mesh,
-                    material: earth_mat,
-                    transform: Transform::from_translation(earth_pos),
-                    ..default()
-                },
-                earth_cell,
-                // ReferenceFrame::<i64>::default(),
-                // Rotates(0.001),
-            ))
-            // .id()
-    // )
-    ;
+    commands.spawn((
+        ComponentInfo {
+            name: "Earth".to_string(),
+            size: earth_radius_m,
+        },
+        BACKGROUND,
+        ValidTarget,
+        PbrBundle {
+            mesh: earth_mesh,
+            material: earth_mat,
+            transform: Transform::from_translation(earth_pos),
+            ..default()
+        },
+        earth_cell,
+    ));
+    commands.spawn((
+        BACKGROUND,
+        Orbit {
+            radius: earth_orbit_radius_m,
+            base_color: Color::BLUE,
+        },
+        Transform::IDENTITY,
+        GlobalTransform::IDENTITY,
+        GridCell::<i64>::ZERO,
+    ));
 
     let mars_mat = materials.add(StandardMaterial {
         base_color: Color::RED,
@@ -448,25 +487,31 @@ fn setup(
     let mars_mesh = meshes.add(Sphere::new(mars_radius_m).mesh().ico(16).unwrap());
     let (mars_cell, mars_pos): (GridCell<i64>, _) =
         space.imprecise_translation_to_grid(Vec3::Z * mars_orbit_radius_m);
-    // initial_target_entity = Some(
-    commands
-            .spawn((
-                ComponentInfo { name: "Mars".to_string(), size: mars_radius_m },
-                BACKGROUND,
-                ValidTarget,
-                PbrBundle {
-                    mesh: mars_mesh,
-                    material: mars_mat,
-                    transform: Transform::from_translation(mars_pos),
-                    ..default()
-                },
-                mars_cell,
-                // ReferenceFrame::<i64>::default(),
-                // Rotates(0.001),
-            ))
-    //         .id()
-    // )
-    ;
+    commands.spawn((
+        ComponentInfo {
+            name: "Mars".to_string(),
+            size: mars_radius_m,
+        },
+        BACKGROUND,
+        ValidTarget,
+        PbrBundle {
+            mesh: mars_mesh,
+            material: mars_mat,
+            transform: Transform::from_translation(mars_pos),
+            ..default()
+        },
+        mars_cell,
+    ));
+    commands.spawn((
+        BACKGROUND,
+        Orbit {
+            radius: mars_orbit_radius_m,
+            base_color: Color::RED,
+        },
+        Transform::IDENTITY,
+        GlobalTransform::IDENTITY,
+        GridCell::<i64>::ZERO,
+    ));
 
     let jupiter_mat = materials.add(StandardMaterial {
         base_color: Color::BEIGE,
@@ -479,25 +524,31 @@ fn setup(
     let jupiter_mesh = meshes.add(Sphere::new(jupiter_radius_m).mesh().ico(16).unwrap());
     let (jupiter_cell, jupiter_pos): (GridCell<i64>, _) =
         space.imprecise_translation_to_grid(Vec3::Z * jupiter_orbit_radius_m);
-    // initial_target_entity = Some(
-    commands
-            .spawn((
-                ComponentInfo { name: "Jupiter".to_string(), size: jupiter_radius_m },
-                BACKGROUND,
-                ValidTarget,
-                PbrBundle {
-                    mesh: jupiter_mesh,
-                    material: jupiter_mat,
-                    transform: Transform::from_translation(jupiter_pos),
-                    ..default()
-                },
-                jupiter_cell,
-                // ReferenceFrame::<i64>::default(),
-                // Rotates(0.001),
-            ))
-    //         .id()
-    // )
-    ;
+    commands.spawn((
+        ComponentInfo {
+            name: "Jupiter".to_string(),
+            size: jupiter_radius_m,
+        },
+        BACKGROUND,
+        ValidTarget,
+        PbrBundle {
+            mesh: jupiter_mesh,
+            material: jupiter_mat,
+            transform: Transform::from_translation(jupiter_pos),
+            ..default()
+        },
+        jupiter_cell,
+    ));
+    commands.spawn((
+        BACKGROUND,
+        Orbit {
+            radius: jupiter_orbit_radius_m,
+            base_color: Color::BEIGE,
+        },
+        Transform::IDENTITY,
+        GlobalTransform::IDENTITY,
+        GridCell::<i64>::ZERO,
+    ));
 
     let saturn_mat = materials.add(StandardMaterial {
         base_color: Color::BEIGE,
@@ -526,13 +577,11 @@ fn setup(
                     ..default()
                 },
                 saturn_cell,
-                // ReferenceFrame::<i64>::default(),
-                // Rotates(0.001),
             ))
             .id(),
     );
     let saturn_rings_mat = materials.add(StandardMaterial {
-        base_color: Color::GRAY,
+        base_color: Color::WHITE,
         perceptual_roughness: 0.8,
         reflectance: 1.0,
         cull_mode: None,
@@ -542,17 +591,24 @@ fn setup(
     let saturn_rings_mesh = meshes.add(Circle::new(saturn_rings_radius_m).mesh().resolution(128));
     commands.spawn((
         BACKGROUND,
-        ValidTarget,
         PbrBundle {
-            mesh: saturn_rings_mesh,
-            material: saturn_rings_mat,
+            mesh: saturn_rings_mesh.clone(),
+            material: saturn_rings_mat.clone(),
             transform: Transform::from_translation(saturn_pos)
-                .with_rotation(Quat::from_rotation_y(PI / 4.0)),
+                .with_rotation(Quat::from_rotation_y((PI / 4.0) - PI)),
             ..default()
         },
         saturn_cell,
-        // ReferenceFrame::<i64>::default(),
-        // Rotates(0.001),
+    ));
+    commands.spawn((
+        BACKGROUND,
+        Orbit {
+            radius: saturn_orbit_radius_m,
+            base_color: Color::BEIGE,
+        },
+        Transform::IDENTITY,
+        GlobalTransform::IDENTITY,
+        GridCell::<i64>::ZERO,
     ));
 
     let uranus_mat = materials.add(StandardMaterial {
@@ -566,25 +622,31 @@ fn setup(
     let uranus_mesh = meshes.add(Sphere::new(uranus_radius_m).mesh().ico(16).unwrap());
     let (uranus_cell, uranus_pos): (GridCell<i64>, _) =
         space.imprecise_translation_to_grid(Vec3::Z * uranus_orbit_radius_m);
-    // initial_target_entity = Some(
-    commands
-            .spawn((
-                ComponentInfo { name: "Uranus".to_string(), size: uranus_radius_m },
-                BACKGROUND,
-                ValidTarget,
-                PbrBundle {
-                    mesh: uranus_mesh,
-                    material: uranus_mat,
-                    transform: Transform::from_translation(uranus_pos),
-                    ..default()
-                },
-                uranus_cell,
-                // ReferenceFrame::<i64>::default(),
-                // Rotates(0.001),
-            ))
-    //         .id()
-    // )
-    ;
+    commands.spawn((
+        ComponentInfo {
+            name: "Uranus".to_string(),
+            size: uranus_radius_m,
+        },
+        BACKGROUND,
+        ValidTarget,
+        PbrBundle {
+            mesh: uranus_mesh,
+            material: uranus_mat,
+            transform: Transform::from_translation(uranus_pos),
+            ..default()
+        },
+        uranus_cell,
+    ));
+    commands.spawn((
+        BACKGROUND,
+        Orbit {
+            radius: uranus_orbit_radius_m,
+            base_color: Color::CYAN,
+        },
+        Transform::IDENTITY,
+        GlobalTransform::IDENTITY,
+        GridCell::<i64>::ZERO,
+    ));
 
     let neptune_mat = materials.add(StandardMaterial {
         base_color: Color::BLUE,
@@ -597,30 +659,36 @@ fn setup(
     let neptune_mesh = meshes.add(Sphere::new(neptune_radius_m).mesh().ico(16).unwrap());
     let (neptune_cell, neptune_pos): (GridCell<i64>, _) =
         space.imprecise_translation_to_grid(Vec3::Z * neptune_orbit_radius_m);
-    // initial_target_entity = Some(
-    commands
-            .spawn((
-                ComponentInfo { name: "Neptune".to_string(), size: neptune_radius_m },
-                BACKGROUND,
-                ValidTarget,
-                PbrBundle {
-                    mesh: neptune_mesh,
-                    material: neptune_mat,
-                    transform: Transform::from_translation(neptune_pos),
-                    ..default()
-                },
-                neptune_cell,
-                // ReferenceFrame::<i64>::default(),
-                // Rotates(0.001),
-            ))
-    //         .id()
-    // )
-    ;
+    commands.spawn((
+        ComponentInfo {
+            name: "Neptune".to_string(),
+            size: neptune_radius_m,
+        },
+        BACKGROUND,
+        ValidTarget,
+        PbrBundle {
+            mesh: neptune_mesh,
+            material: neptune_mat,
+            transform: Transform::from_translation(neptune_pos),
+            ..default()
+        },
+        neptune_cell,
+    ));
+    commands.spawn((
+        BACKGROUND,
+        Orbit {
+            radius: neptune_orbit_radius_m,
+            base_color: Color::BLUE,
+        },
+        Transform::IDENTITY,
+        GlobalTransform::IDENTITY,
+        GridCell::<i64>::ZERO,
+    ));
 
     /* Spawn the user controlled camera */
     let (cam_cell, cam_pos): (GridCell<i64>, _) = space.translation_to_grid(DVec3 {
-        x: 0.0,
-        y: 0.0,
+        x: (sun_radius_m as f64 * 20.0) + 1000.0,
+        y: (sun_radius_m as f64 * 20.0) + 1000.0,
         z: (sun_radius_m as f64 * 20.0) + 1000.0,
     });
     commands.spawn((
@@ -644,34 +712,35 @@ fn setup(
             .with_speed(1.0),
     ));
 
-    /* Spawn a purple ball with a radius of 1.0 */
-    let (purple_ball_cell, purple_ball_pos): (GridCell<i64>, _) = space.translation_to_grid(Vec3 {
-        x: 0.0,
-        y: 0.0,
-        z: sun_radius_m * 20.0,
-    });
-    let purple_ball_mat = materials.add(StandardMaterial {
+    let home_object_mat = materials.add(StandardMaterial {
         base_color: Color::PURPLE,
         perceptual_roughness: 1.0,
         reflectance: 0.0,
         ..default()
     });
-    let purple_ball_radius_m = 1.0;
-    let purple_ball_mesh = meshes.add(Sphere::new(purple_ball_radius_m).mesh().ico(16).unwrap());
+    let home_object_size_m = 1.0;
+    let home_object_distance_m = sun_radius_m * 20.0;
+    let (home_object_cell, _home_object_pos): (GridCell<i64>, _) =
+        space.translation_to_grid(DVec3::splat(home_object_distance_m as f64));
+    let home_object_mesh = meshes.add(Cuboid::new(
+        home_object_size_m,
+        home_object_size_m,
+        home_object_size_m,
+    ));
     commands.spawn((
         ComponentInfo {
-            name: "Starting Location".to_string(),
-            size: purple_ball_radius_m,
+            name: "Home".to_string(),
+            size: home_object_size_m,
         },
         ValidTarget,
         BACKGROUND,
         PbrBundle {
-            mesh: purple_ball_mesh,
-            material: purple_ball_mat,
-            transform: Transform::from_translation(purple_ball_pos),
+            mesh: home_object_mesh,
+            material: home_object_mat,
+            transform: Transform::IDENTITY,
             ..default()
         },
-        purple_ball_cell,
+        home_object_cell,
     ));
 
     commands.insert_resource(TargetResource {
@@ -804,12 +873,11 @@ fn ui_text_update(
             Ok(target_entity_component_info) => {
                 target_entity_name = &target_entity_component_info.name;
             }
-            Err(e) => error!("{:?}", e),
+            Err(e) => error!("match component_info_query.get(target_entity) {:?}", e),
         },
-        None => todo!(),
+        None => {}
     }
 
-    // let camera_3d_transform = camera_3d_query.single();
     let camera_coordinates = camera_3d_transform.translation;
     let camera_controller = camera_controller_query.single();
     let (velocity, _) = camera_controller.velocity();
@@ -832,6 +900,130 @@ fn ui_text_update(
     hud_text.sections[0].value = hud_text_string.clone();
 }
 
+fn update_valid_target_gizmos(
+    global_transform_query: Query<&GlobalTransform>,
+    valid_target_entity_query: Query<Entity, With<ValidTarget>>,
+    mut overlay_gizmos: Gizmos<OverlayGizmos>,
+    camera_3d_query: Query<(&mut Camera, &GlobalTransform), (With<Camera3d>, Without<Camera2d>)>,
+    camera_2d_query: Query<(&mut Camera, &GlobalTransform), (With<Camera2d>, Without<Camera3d>)>,
+) {
+    for each_valid_target_entity in valid_target_entity_query.iter() {
+        let Ok(transform) = global_transform_query.get(each_valid_target_entity) else {
+            return;
+        };
+        let (_scale, _rotationn, translation) = transform.to_scale_rotation_translation();
+
+        let (camera_3d, camera_3d_global_transform) = camera_3d_query.single();
+        let (camera_2d, camera_2d_global_transform) = camera_2d_query.single();
+        match camera_3d.world_to_viewport(camera_3d_global_transform, translation) {
+            Some(each_valid_target_viewport_position) => {
+                match camera_2d.viewport_to_world_2d(
+                    camera_2d_global_transform,
+                    each_valid_target_viewport_position,
+                ) {
+                    Some(each_valid_target_world_2d_position) => {
+                        let color = match Color::hex("FE9F00") {
+                            Ok(c) => c,
+                            Err(_) => Color::rgb(1.0, 1.0, 1.0),
+                        };
+                        overlay_gizmos.linestrip_2d(
+                            vec![
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x + 25.0,
+                                    y: each_valid_target_world_2d_position.y + 30.0,
+                                },
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x + 30.0,
+                                    y: each_valid_target_world_2d_position.y + 30.0,
+                                },
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x + 30.0,
+                                    y: each_valid_target_world_2d_position.y + 25.0,
+                                },
+                            ],
+                            color,
+                        );
+                        overlay_gizmos.linestrip_2d(
+                            vec![
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x + 30.0,
+                                    y: each_valid_target_world_2d_position.y - 25.0,
+                                },
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x + 30.0,
+                                    y: each_valid_target_world_2d_position.y - 30.0,
+                                },
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x + 25.0,
+                                    y: each_valid_target_world_2d_position.y - 30.0,
+                                },
+                            ],
+                            color,
+                        );
+                        overlay_gizmos.linestrip_2d(
+                            vec![
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x - 25.0,
+                                    y: each_valid_target_world_2d_position.y + 30.0,
+                                },
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x - 30.0,
+                                    y: each_valid_target_world_2d_position.y + 30.0,
+                                },
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x - 30.0,
+                                    y: each_valid_target_world_2d_position.y + 25.0,
+                                },
+                            ],
+                            color,
+                        );
+                        overlay_gizmos.linestrip_2d(
+                            vec![
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x - 30.0,
+                                    y: each_valid_target_world_2d_position.y - 25.0,
+                                },
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x - 30.0,
+                                    y: each_valid_target_world_2d_position.y - 30.0,
+                                },
+                                Vec2 {
+                                    x: each_valid_target_world_2d_position.x - 25.0,
+                                    y: each_valid_target_world_2d_position.y - 30.0,
+                                },
+                            ],
+                            color,
+                        );
+                    }
+                    None => {}
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+fn update_orbit_gizmos(
+    global_transform_query: Query<&GlobalTransform>,
+    orbit_entity_query: Query<(Entity, &Orbit)>,
+    mut default_gizmos: Gizmos,
+) {
+    for (each_entity, each_orbit) in orbit_entity_query.iter() {
+        let Ok(transform) = global_transform_query.get(each_entity) else {
+            return;
+        };
+        let (_scale, _rotationn, translation) = transform.to_scale_rotation_translation();
+        match Direction3d::from_xyz(transform.up().x, transform.up().y, transform.up().z) {
+            Ok(d) => {
+                default_gizmos
+                    .circle(translation, d, each_orbit.radius, each_orbit.base_color)
+                    .segments(64);
+            }
+            Err(e) => error!("{:?}", e),
+        }
+    }
+}
+
 fn update_targeting_overlay(
     camera_3d_query: Query<(&mut Camera, &GlobalTransform), (With<Camera3d>, Without<Camera2d>)>,
     camera_2d_query: Query<(&mut Camera, &GlobalTransform), (With<Camera2d>, Without<Camera3d>)>,
@@ -844,6 +1036,7 @@ fn update_targeting_overlay(
             Without<Camera3d>,
             Without<Camera2d>,
             Without<TargetLabel>,
+            Without<CrosshairType>,
         ),
     >,
     mut target_object_reticle_transform_query: Query<
@@ -854,18 +1047,14 @@ fn update_targeting_overlay(
             Without<Camera3d>,
             Without<Camera2d>,
             Without<TargetLabel>,
+            Without<CrosshairType>,
         ),
     >,
     mut target_label_style_query: Query<(&mut Style, &mut Text), With<TargetLabel>>,
-    // mut cursor_nearest_reticle_visibility_query: Query<&mut Visibility, With<CursorNearestReticle>>,
-    // mut target_object_reticle_visibility_query: Query<
-    //     &mut Visibility,
-    //     (With<TargetObjectReticle>, Without<CursorNearestReticle>),
-    // >,
     cursor_nearest_entity_query: Query<Entity, With<CursorNearestReticle>>,
     target_object_reticle_entity_query: Query<Entity, With<TargetObjectReticle>>,
     target_label_entity_query: Query<Entity, With<TargetLabel>>,
-    objects: Query<&GlobalTransform>,
+    global_transform_query: Query<&GlobalTransform>,
     mut visibility_query: Query<&mut Visibility>,
     key: Res<ButtonInput<KeyCode>>,
 ) {
@@ -893,7 +1082,6 @@ fn update_targeting_overlay(
             let target_label_visibility = second_visibility_entities_split.1;
 
             let mut cursor_nearest_entity = None;
-            // let mut cursor_nearest_entity_name: String;
             let mut cursor_target_onscreen = false;
             let mut cursor_nearest_size = 0.0;
             let mut cursor_nearest = Vec2 {
@@ -915,6 +1103,12 @@ fn update_targeting_overlay(
                             each_object_3d_viewport_position,
                         ) {
                             Some(each_object_2d_viewport_position) => {
+                                trace!(
+                                    "{:?} {:?}",
+                                    each_valid_target_info.name,
+                                    each_object_2d_viewport_position
+                                );
+
                                 let length_difference = each_object_2d_viewport_position.length()
                                     - cursor_nearest.length();
                                 if length_difference < 0.0 {
@@ -923,16 +1117,12 @@ fn update_targeting_overlay(
                                             cursor_target_onscreen = true;
                                             cursor_nearest = each_object_2d_viewport_position;
                                             cursor_nearest_entity = Some(each_valid_target_entity);
-                                            // cursor_nearest_entity_name =
-                                            //     each_valid_target_info.name.clone();
                                             cursor_nearest_size = each_valid_target_info.size;
                                         }
                                     } else {
                                         cursor_target_onscreen = true;
                                         cursor_nearest = each_object_2d_viewport_position;
                                         cursor_nearest_entity = Some(each_valid_target_entity);
-                                        // cursor_nearest_entity_name =
-                                        //     each_valid_target_info.name.clone();
                                         cursor_nearest_size = each_valid_target_info.size;
                                     }
                                 }
@@ -957,7 +1147,7 @@ fn update_targeting_overlay(
             };
 
             match target_resource.target {
-                Some(target) => match objects.get(target) {
+                Some(target) => match global_transform_query.get(target) {
                     Ok(target_object) => {
                         let (
                             _target_object_scale,
@@ -989,16 +1179,19 @@ fn update_targeting_overlay(
                                             target_label_style_query.single_mut();
 
                                         target_label_style.top =
-                                            Val::Px(target_object_viewport_position.y + 15.0);
+                                            Val::Px(target_object_viewport_position.y + 30.0);
                                         target_label_style.left =
-                                            Val::Px(target_object_viewport_position.x + 15.0);
+                                            Val::Px(target_object_viewport_position.x + 30.0);
 
                                         match valid_targets_query.get(target) {
                                             Ok((_, _, target_component_info)) => {
                                                 target_label_text.sections[0].value =
                                                     target_component_info.name.to_string();
                                             }
-                                            Err(e) => error!("{:?}", e),
+                                            Err(e) => error!(
+                                                "match valid_targets_query.get(target) {:?}",
+                                                e
+                                            ),
                                         }
                                     }
                                     (false, Some(_target_object_overlay_position)) => {
@@ -1027,12 +1220,11 @@ fn update_targeting_overlay(
             }
 
             /* Highlight target with crosshair reticle */
-
             if key.just_pressed(KeyCode::Enter) {
                 target_resource.target = cursor_nearest_entity;
             }
         }
-        Err(e) => error!("{:?}", e),
+        Err(e) => error!("match visibility_entity_results {:?}", e),
     }
 }
 
@@ -1085,14 +1277,13 @@ fn focus_on_target(
         (With<CameraController>, With<Camera3d>, Without<Camera2d>),
     >,
     target_resource: ResMut<TargetResource>,
-    objects: Query<&GlobalTransform>,
+    global_transform_query: Query<&GlobalTransform>,
     mut state: ResMut<NextState<AutomationState>>,
 ) {
     let mut camera_3d_transform = camera_3d_query.single_mut();
     match target_resource.target {
-        Some(target) => match objects.get(target) {
+        Some(target) => match global_transform_query.get(target) {
             Ok(target_object) => {
-                // some_rotation_quaternion = initial_orientation_quaternion * target_orientation_quaternion'
                 let target_rotation = camera_3d_transform
                     .looking_at(
                         target_object.translation(),
@@ -1113,295 +1304,15 @@ fn focus_on_target(
                     .angle_between(camera_3d_transform.rotation.normalize());
                 trace!("angle_between: {:?}", angle_between);
                 if angle_between < 0.01 {
-                    // camera_3d_transform.rotation = target_rotation.normalize();
+                    camera_3d_transform.rotation = target_rotation;
                     debug!("target aligned");
                     state.set(AutomationState::Idle);
                 } else {
                     camera_3d_transform.rotation = new_transform.rotation;
                 }
             }
-            Err(e) => error!("{:?}", e),
+            Err(e) => error!("match global_transform_query.get(target) {:?}", e),
         },
-        None => todo!(),
-    }
-}
-
-#[derive(Component)]
-pub enum CrosshairType {
-    SmallSquareCorners,
-    SmallTriangleArrows,
-}
-
-impl Default for CrosshairType {
-    fn default() -> Self {
-        debug!("default crosshair");
-        CrosshairType::SmallSquareCorners
-    }
-}
-
-struct SpawnCrosshair {
-    crosshair_type: CrosshairType,
-}
-
-impl EntityCommand for SpawnCrosshair {
-    fn apply(self, entity: Entity, world: &mut World) {
-        debug!("SpawnCrosshair|Command|apply()");
-
-        match self.crosshair_type {
-            CrosshairType::SmallSquareCorners => {
-                let short_horizontal =
-                    world.resource_scope(|_world, mut meshes: Mut<Assets<Mesh>>| {
-                        Mesh2dHandle(meshes.add(Rectangle::new(10.0, 1.0)))
-                    });
-                let short_vertical =
-                    world.resource_scope(|_world, mut meshes: Mut<Assets<Mesh>>| {
-                        Mesh2dHandle(meshes.add(Rectangle::new(1.0, 10.0)))
-                    });
-                let color_material_handle = world.resource_scope(
-                    |_world, mut color_materials: Mut<Assets<ColorMaterial>>| {
-                        color_materials.add(match Color::hex("FE9F00") {
-                            Ok(c) => c,
-                            Err(_) => Color::rgb(1.0, 1.0, 1.0),
-                        })
-                    },
-                );
-
-                world
-                    .spawn((
-                        OVERLAY,
-                        Transform::default(),
-                        GlobalTransform::default(),
-                        // Visibility::Hidden,
-                        // InheritedVisibility::HIDDEN,
-                        IgnoreFloatingOrigin,
-                    ))
-                    .with_children(|parent| {
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: short_horizontal.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: 25.0,
-                                        y: 30.0,
-                                        z: 0.0,
-                                    },
-                                    ..default()
-                                },
-                                material: color_material_handle.clone(),
-                                ..default()
-                            },
-                        ));
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: short_horizontal.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: -25.0,
-                                        y: -30.0,
-                                        z: 0.0,
-                                    },
-                                    ..default()
-                                },
-                                material: color_material_handle.clone(),
-                                ..default()
-                            },
-                        ));
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: short_horizontal.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: -25.0,
-                                        y: 30.0,
-                                        z: 0.0,
-                                    },
-                                    ..default()
-                                },
-                                material: color_material_handle.clone(),
-                                ..default()
-                            },
-                        ));
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: short_horizontal.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: 25.0,
-                                        y: -30.0,
-                                        z: 0.0,
-                                    },
-                                    ..default()
-                                },
-                                material: color_material_handle.clone(),
-                                ..default()
-                            },
-                        ));
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: short_vertical.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: 30.0,
-                                        y: 25.0,
-                                        z: 0.0,
-                                    },
-                                    ..default()
-                                },
-                                material: color_material_handle.clone(),
-                                ..default()
-                            },
-                        ));
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: short_vertical.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: -30.0,
-                                        y: -25.0,
-                                        z: 0.0,
-                                    },
-                                    ..default()
-                                },
-                                material: color_material_handle.clone(),
-                                ..default()
-                            },
-                        ));
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: short_vertical.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: -30.0,
-                                        y: 25.0,
-                                        z: 0.0,
-                                    },
-                                    ..default()
-                                },
-                                material: color_material_handle.clone(),
-                                ..default()
-                            },
-                        ));
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: short_vertical.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: 30.0,
-                                        y: -25.0,
-                                        z: 0.0,
-                                    },
-                                    ..default()
-                                },
-                                material: color_material_handle.clone(),
-                                ..default()
-                            },
-                        ));
-                    });
-            }
-
-            CrosshairType::SmallTriangleArrows => {
-                let small_triangle =
-                    world.resource_scope(|_world, mut meshes: Mut<Assets<Mesh>>| {
-                        Mesh2dHandle(meshes.add(Triangle2d::new(
-                            Vec2::ZERO,
-                            Vec2 { x: 10.0, y: 0.0 },
-                            Vec2 { x: 0.0, y: 10.0 },
-                        )))
-                    });
-                let camera_reticle_color_handle = world.resource_scope(
-                    |_world, mut color_materials: Mut<Assets<ColorMaterial>>| {
-                        color_materials.add(match Color::hex("B2AFC2") {
-                            Ok(c) => c,
-                            Err(_) => Color::rgb(1.0, 1.0, 1.0),
-                        })
-                    },
-                );
-
-                world
-                    .spawn((
-                        OVERLAY,
-                        Transform::default(),
-                        GlobalTransform::default(),
-                        IgnoreFloatingOrigin,
-                    ))
-                    .with_children(|parent| {
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: small_triangle.clone(),
-                                material: camera_reticle_color_handle.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: 10.0,
-                                        y: 10.0,
-                                        z: 0.0,
-                                    },
-                                    ..default()
-                                },
-                                ..default()
-                            },
-                        ));
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: small_triangle.clone(),
-                                material: camera_reticle_color_handle.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: -10.0,
-                                        y: 10.0,
-                                        z: 0.0,
-                                    },
-                                    rotation: Quat::from_rotation_z(PI / 2.0),
-                                    ..default()
-                                },
-                                ..default()
-                            },
-                        ));
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: small_triangle.clone(),
-                                material: camera_reticle_color_handle.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: -10.0,
-                                        y: -10.0,
-                                        z: 0.0,
-                                    },
-                                    rotation: Quat::from_rotation_z(PI),
-                                    ..default()
-                                },
-                                ..default()
-                            },
-                        ));
-                        parent.spawn((
-                            OVERLAY,
-                            MaterialMesh2dBundle {
-                                mesh: small_triangle.clone(),
-                                material: camera_reticle_color_handle.clone(),
-                                transform: Transform {
-                                    translation: Vec3 {
-                                        x: 10.0,
-                                        y: -10.0,
-                                        z: 0.0,
-                                    },
-                                    rotation: Quat::from_rotation_z(-PI / 2.0),
-                                    ..default()
-                                },
-                                ..default()
-                            },
-                        ));
-                    });
-            }
-        }
+        None => {}
     }
 }

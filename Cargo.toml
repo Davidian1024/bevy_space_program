@@ -13,6 +13,7 @@ bevy_dylib = "0.13.2"
 bevy_rapier3d = { version = "0.26.0", features = [ "enhanced-determinism", "parallel" ] }
 rand = "0.8.5"
 big_space = "0.6.0"
+# big_space = { path = "../big_space" }
 bevy_framepace = { version = "0.15.0", default-features = false }
 bevy-scene-hook = "10.0.0"
 anyhow = "1.0.85"

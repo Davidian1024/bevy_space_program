@@ -17,7 +17,9 @@ use bevy::{
 };
 use bevy_rapier3d::prelude::*;
 use bevy_scene_hook::{HookPlugin, HookedSceneBundle, SceneHook};
-use bevy_space_program::{generate_mipmaps, MipmapGeneratorPlugin, MipmapGeneratorSettings};
+use bevy_space_program::mipmap::{
+    generate_mipmaps, MipmapGeneratorPlugin, MipmapGeneratorSettings,
+};
 use big_space::{
     camera::{CameraController, CameraInput},
     reference_frame::RootReferenceFrame,
