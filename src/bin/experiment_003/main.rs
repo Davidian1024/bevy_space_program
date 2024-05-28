@@ -12,7 +12,7 @@ use bevy::{
 use bevy_space_program::crosshair::{spawn_crosshair, CrosshairType};
 use big_space::{
     camera::{CameraController, CameraInput},
-    reference_frame::RootReferenceFrame,
+    reference_frame::{ReferenceFrame, RootReferenceFrame},
     world_query::GridTransformReadOnly,
     FloatingOrigin, GridCell, IgnoreFloatingOrigin,
 };
@@ -46,7 +46,12 @@ fn main() {
         .add_systems(Startup, (setup, ui_text_setup))
         .add_systems(
             Update,
-            (ui_text_update, input_handling, update_targeting_overlay),
+            (
+                ui_text_update,
+                input_handling,
+                update_targeting_overlay,
+                rotate,
+            ),
         )
         .add_systems(
             Update,
@@ -88,6 +93,9 @@ pub struct ComponentInfo {
     name: String,
     size: f32,
 }
+
+#[derive(Component)]
+struct Rotates(Vec3);
 
 #[derive(Resource, Debug)]
 pub struct TargetResource {
@@ -741,6 +749,12 @@ fn setup(
             ..default()
         },
         home_object_cell,
+        ReferenceFrame::<i64>::default(),
+        Rotates(Vec3 {
+            x: 0.0201,
+            y: 0.021,
+            z: 0.0210001,
+        }),
     ));
 
     commands.insert_resource(TargetResource {
@@ -1225,6 +1239,14 @@ fn update_targeting_overlay(
             }
         }
         Err(e) => error!("match visibility_entity_results {:?}", e),
+    }
+}
+
+fn rotate(mut rotate_query: Query<(&mut Transform, &Rotates)>) {
+    for (mut transform, rotates) in rotate_query.iter_mut() {
+        transform.rotate_x(rotates.0.x);
+        transform.rotate_y(rotates.0.y);
+        transform.rotate_z(rotates.0.z);
     }
 }
 
